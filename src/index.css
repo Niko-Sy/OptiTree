@@ -1,68 +1,60 @@
+﻿@import "tailwindcss";
+
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --primary: #1677ff;
+  --primary-hover: #4096ff;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
-}
+* { box-sizing: border-box; }
 
-body {
+html, body, #root {
   margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: #f0f2f5;
+  color: #1f2937;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+.canvas-grid {
+  background-color: #f0f2f5;
+  background-image:
+    linear-gradient(to right, #dde3ea 1px, transparent 1px),
+    linear-gradient(to bottom, #dde3ea 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.fault-node {
+  position: absolute;
   display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  transition: border-color 0.25s;
+  user-select: none;
+  transition: box-shadow 0.15s;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  padding: 4px 8px;
+  word-break: break-all;
+  line-height: 1.3;
+  z-index: 10;
 }
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
+.fault-node:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.18); z-index: 20; }
+.fault-node.selected { outline: 2.5px solid #1677ff; box-shadow: 0 0 0 4px rgba(22,119,255,0.2); z-index: 20; }
+.fault-node.top-event   { border-radius: 50%;  background: #c7d2fe; border: 2px solid #4338ca; color: #312e81; }
+.fault-node.mid-event   { border-radius: 8px;  background: #e0f2fe; border: 2px solid #0ea5e9; color: #075985; }
+.fault-node.basic-event { border-radius: 50%;  background: #d1fae5; border: 2px solid #059669; color: #064e3b; }
+/* gate nodes: border/bg/color handled inline per gate type (OR/AND/NOT) */
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
+.fade-in-up { animation: fadeInUp 0.3s ease-out both; }

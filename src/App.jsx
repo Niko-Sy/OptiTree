@@ -1,35 +1,63 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+﻿import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { App as AntApp, ConfigProvider } from "antd";
+import zhCN from "antd/locale/zh_CN";
+import Dashboard from "./pages/Dashboard";
+import FaultTreeEditor from "./pages/FaultTreeEditor";
+import Login from "./pages/Login";
+import Register from "./pages/Register";
+import { AuthProvider, useAuth } from "./store/useAuthStore";
+import "./App.css";
 
-function App() {
-  const [count, setCount] = useState(0)
+const antTheme = {
+  token: {
+    colorPrimary: "#1677ff",
+    borderRadius: 8,
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif",
+  },
+};
 
-  return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+// ─── 路由守卫：未登录自动跳转到 /login ──────────────────────────
+function RequireAuth({ children }) {
+  const { isAuthenticated } = useAuth();
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return children;
 }
 
-export default App
+// ─── 已登录时访问登录/注册页面，自动跳转到 /dashboard ───────────
+function GuestOnly({ children }) {
+  const { isAuthenticated } = useAuth();
+  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+export default function App() {
+  return (
+    <ConfigProvider theme={antTheme} locale={zhCN}>
+      <AntApp>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route
+                path="/login"
+                element={<GuestOnly><Login /></GuestOnly>}
+              />
+              <Route
+                path="/register"
+                element={<GuestOnly><Register /></GuestOnly>}
+              />
+              <Route
+                path="/dashboard"
+                element={<RequireAuth><Dashboard /></RequireAuth>}
+              />
+              <Route
+                path="/editor"
+                element={<RequireAuth><FaultTreeEditor /></RequireAuth>}
+              />
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </AntApp>
+    </ConfigProvider>
+  );
+}
