@@ -48,6 +48,7 @@ export default function ProjectCard({ project, onDelete }) {
               {isKg && (
                 <Tag color="purple" className="text-xs shrink-0">知识图谱</Tag>
               )}
+              {!isKg && (<Tag color="blue" className="text-xs shrink-0">故障树</Tag>)}
             </div>
             <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
               <ClockCircleOutlined />

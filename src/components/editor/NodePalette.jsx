@@ -146,7 +146,7 @@ export default function NodePalette() {
 
   return (
     <div
-      className="absolute left-0 top-0 bottom-0 z-20 bg-white border-r border-gray-200 flex flex-col transition-all duration-200"
+      className="absolute left-0 top-0 bottom-0 z-20 bg-white/70 backdrop-blur-sm border-r border-gray-200 flex flex-col transition-all duration-200"
       style={{ width: collapsed ? 0 : 208 }}
       onDragOver={onPaletteDragOver}
       onDrop={onPaletteDrop}
@@ -165,7 +165,7 @@ export default function NodePalette() {
           outline: 'none',
         }}
         className="w-6 h-6 flex items-center justify-center rounded-full
-          bg-white border  border-gray-300 
+          bg-white/70 backdrop-blur-sm border border-gray-300
           text-gray-800 hover:text-blue-500 hover:bg-blue-50
           transition-colors cursor-pointer select-none"
       >

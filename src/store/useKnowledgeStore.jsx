@@ -70,9 +70,14 @@ function reducer(state, action) {
     }
 
     case 'UPDATE_NODE': {
-      const rfNodes = state.rfNodes.map(n =>
-        n.id === action.id ? { ...n, data: { ...n.data, ...action.data } } : n
-      )
+      const rfNodes = state.rfNodes.map(n => {
+        if (n.id !== action.id) return n
+        return {
+          ...n,
+          data:  action.data  ? { ...n.data,  ...action.data  } : n.data,
+          style: action.style ? { ...n.style, ...action.style } : n.style,
+        }
+      })
       const next = { ...state, rfNodes }
       return { ...next, ...pushHistory(next) }
     }
@@ -157,8 +162,8 @@ export function KnowledgeStoreProvider({ children }) {
     addNode: useCallback((node) =>
       dispatch({ type: 'ADD_NODE', node }), []),
 
-    updateNode: useCallback((id, data) =>
-      dispatch({ type: 'UPDATE_NODE', id, data }), []),
+    updateNode: useCallback((id, data, style) =>
+      dispatch({ type: 'UPDATE_NODE', id, data, style }), []),
 
     deleteNode: useCallback((id) =>
       dispatch({ type: 'DELETE_NODE', id }), []),

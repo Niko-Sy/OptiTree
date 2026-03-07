@@ -63,6 +63,7 @@ function KnowledgeEditorInner({ kgId, kgName }) {
       <KgToolbar kgName={kgName} kgId={kgId} />
       <div className="flex-1 relative overflow-hidden">
         <KgCanvas leftOffset={leftOffset} rightOffset={rightOffset} />
+        {/* 左右偏移量仅传入用于 Controls/MiniMap 的内部定位 */}
         <KgEntityPalette collapsed={paletteCollapsed} onCollapsedChange={setPaletteCollapsed} />
         <KgPropertiesPanel collapsed={propsCollapsed} onCollapsedChange={setPropsCollapsed} />
       </div>

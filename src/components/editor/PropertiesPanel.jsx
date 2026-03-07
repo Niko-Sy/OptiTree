@@ -243,7 +243,7 @@ export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
 
   return (
     <div
-      className="absolute right-0 top-0 bottom-0 z-20 bg-white border-l border-gray-200 flex flex-col transition-all duration-200"
+      className="absolute right-0 top-0 bottom-0 z-20 bg-white/70 backdrop-blur-sm border-l border-gray-200 flex flex-col transition-all duration-200"
       style={{ width: collapsed ? 0 : 256 }}
     >
       {/* Floating toggle button — protrudes from left edge */}
@@ -259,8 +259,8 @@ export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
           outline: 'none',
         }}
         className="w-6 h-6 flex items-center justify-center rounded-full
-          bg-white border  border-gray-300 
-          text-gray-800  shadow-sm hover:text-blue-500 hover:bg-blue-50
+          bg-white/70 backdrop-blur-sm border border-gray-300
+          text-gray-800 shadow-sm hover:text-blue-500 hover:bg-blue-50
           transition-colors cursor-pointer select-none"
       >
         <svg width="8" height="8" viewBox="0 0 10 14" fill="none">

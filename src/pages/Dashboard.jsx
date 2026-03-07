@@ -192,28 +192,29 @@ export default function Dashboard() {
     {
       key: 'ft',
       icon: <ApartmentOutlined />,
-      label: '新建故障树',
+      label: '新建空白故障树',
       onClick: () => setShowModal(true),
     },
     {
       key: 'doc-ft',
       icon: <UploadOutlined />,
-      label: '文档 → 故障树（AI 生成）',
+      label: 'AI识别文档 → 故障树（Beta）',
       onClick: () => { setDocUploadTarget('faultTree'); setActiveTab('ft') },
     },
     { type: 'divider' },
-    {
-      key: 'doc-kg',
-      icon: <ThunderboltOutlined />,
-      label: '文档 → 知识图谱（AI 生成）',
-      onClick: () => { setDocUploadTarget('knowledge'); setActiveTab('kg') },
-    },
     {
       key: 'kg',
       icon: <ApiOutlined />,
       label: '新建空白知识图谱',
       onClick: () => setShowKgModal(true),
     },
+    {
+      key: 'doc-kg',
+      icon: <ThunderboltOutlined />,
+      label: 'AI识别文档 → 知识图谱（Beta）',
+      onClick: () => { setDocUploadTarget('knowledge'); setActiveTab('kg') },
+    },
+    
   ]
 
   // ─── 当前 tab 的过滤数据 ──────────────────────────────────────

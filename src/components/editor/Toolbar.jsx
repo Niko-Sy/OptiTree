@@ -1,6 +1,6 @@
 // 编辑器顶部工具栏组件，包含项目名称、导入/导出、撤销/重做、自动排版、AI 校验等功能按钮
 import { useRef } from 'react'
-import { Button, Tooltip, message, Upload } from 'antd'
+import { Button, Tooltip, message, Upload, Tag } from 'antd'
 import {
   UndoOutlined, RedoOutlined, DownloadOutlined, UploadOutlined,
   ApartmentOutlined, RobotOutlined, ArrowLeftOutlined, SaveOutlined,
@@ -221,24 +221,37 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
         />
       </Tooltip>
 
-      <span className="text-lg font-medium text-gray-700 max-w-40 truncate">{projectName}</span>
+      <span className="font-semibold text-gray-800 text-lg max-w-40 truncate border-gray-200 px-2">{projectName || '故障树'}</span>
+        
+        <Tag color="blue" className="text-xs shrink-0">故障树</Tag>
 
       <span className="mx-1 w-px h-5 bg-gray-200" />
 
       {/* Import */}
       <Upload beforeUpload={handleImportJSON} showUploadList={false} accept=".json">
         <Tooltip title="导入 JSON 文件">
-          <Button icon={<UploadOutlined />} size="small">导入 JSON</Button>
+          <Button icon={<UploadOutlined />} size="small">导入</Button>
         </Tooltip>
       </Upload>
 
-      <Tooltip title="加载演示数据">
+      {/* <Tooltip title="加载演示数据">
         <Button size="small" onClick={handleLoadDemo}>加载示例</Button>
-      </Tooltip>
+      </Tooltip> */}
 
       <Tooltip title="导出为 JSON">
-        <Button icon={<DownloadOutlined />} size="small" onClick={handleExport}>导出 JSON</Button>
+        <Button icon={<DownloadOutlined />} size="small" onClick={handleExport}>导出</Button>
       </Tooltip>
+
+      {/* Save Version */}
+        <Tooltip title="另存为版本快照">
+            <Button
+            icon={<SaveOutlined />}
+            size="small"
+            onClick={handleSaveVersion}
+            >
+            另存
+            </Button>
+        </Tooltip>
 
       <span className="mx-1 w-px h-5 bg-gray-200" />
 
@@ -260,11 +273,23 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
             size="small"
             onClick={handleAutoLayout}
           >
-            自动排版
+            排版
           </Button>
         </Tooltip>
 
-        {/* Collaboration */}
+        {/* AI Check */}
+        <Tooltip title="AI 逻辑校验">
+          <Button
+            type="primary"
+            icon={<RobotOutlined />}
+            size="small"
+            onClick={handleAiCheck}
+          >
+            AI 校验
+          </Button>
+        </Tooltip>
+
+         {/* Collaboration */}
         <Tooltip title="协作与版本管理">
           <Button
             icon={<TeamOutlined />}
@@ -279,28 +304,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
           </Button>
         </Tooltip>
 
-        {/* Save Version */}
-        <Tooltip title="另存为版本快照">
-          <Button
-            icon={<SaveOutlined />}
-            size="small"
-            onClick={handleSaveVersion}
-          >
-            另存版本
-          </Button>
-        </Tooltip>
-
-        {/* AI Check */}
-        <Tooltip title="AI 逻辑校验">
-          <Button
-            type="primary"
-            icon={<RobotOutlined />}
-            size="small"
-            onClick={handleAiCheck}
-          >
-            AI 逻辑校验
-          </Button>
-        </Tooltip>
+        
 
         <span className="mx-2 w-px h-5 bg-gray-200" />
 

@@ -22,7 +22,7 @@ const NODE_MINIMAP_COLOR = {
 // ─── 自定义节点组件 ────────────────────────────────────────────────
 import { Handle, Position } from 'reactflow'
 
-function KgNode({ data, type, selected }) {
+function KgNode({ data, type, selected, style: nodeStyle }) {
   const cfg = ENTITY_TYPES[type] ?? ENTITY_TYPES.entityNode
   return (
     <div
@@ -31,8 +31,10 @@ function KgNode({ data, type, selected }) {
         border: `2px solid ${selected ? '#1677ff' : cfg.border}`,
         borderRadius: 8,
         padding: '6px 12px',
-        minWidth: 100,
-        maxWidth: 180,
+        minWidth: nodeStyle?.width ? undefined : 100,
+        maxWidth: nodeStyle?.width ? undefined : 180,
+        width:  nodeStyle?.width  ?? undefined,
+        height: nodeStyle?.height ?? undefined,
         boxShadow: selected ? `0 0 0 2px #1677ff44` : '0 1px 4px rgba(0,0,0,.1)',
         fontSize: 12,
         color: cfg.color,
@@ -40,6 +42,10 @@ function KgNode({ data, type, selected }) {
         textAlign: 'center',
         cursor: 'grab',
         userSelect: 'none',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
       }}
     >
       <Handle type="target" position={Position.Top} style={{ background: cfg.border, width: 8, height: 8 }} />
@@ -72,10 +78,11 @@ const defaultEdgeOptions = {
 
 // ─── 主画布组件 ────────────────────────────────────────────────────
 export default function KgCanvas({ leftOffset = 208, rightOffset = 256 }) {
+  // leftOffset / rightOffset 仅用于定位内部控件，画布本身铺满全区域
   const { rfNodes, rfEdges } = useKnowledgeStore()
   const {
     onNodesChange, onEdgesChange, onConnect,
-    onNodeDragStop, addNode, select,
+    onNodeDragStop: commitNodeMoves, addNode, select, deleteNode,
   } = useKnowledgeActions()
   const reactFlowWrapper = useRef(null)
   const [reactFlowInstance, setReactFlowInstance] = [null, () => {}]
@@ -87,6 +94,30 @@ export default function KgCanvas({ leftOffset = 208, rightOffset = 256 }) {
     const edgeId = edges[0]?.id ?? null
     select(nodeIds, edgeId)
   }, [select])
+
+  // ── 拖拽节点：通知左侧面板显示垃圾桶区域 ──────────────────
+  const handleNodeDragStart = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('kgNodeDragStart'))
+  }, [])
+
+  // 拖拽过程中：实时检测是否悉停在左侧面板区域
+  const handleNodeDrag = useCallback((event) => {
+    const bounds = reactFlowWrapper.current?.getBoundingClientRect()
+    const relX = event.clientX - (bounds?.left ?? 0)
+    const overPalette = relX < leftOffset && leftOffset > 0
+    window.dispatchEvent(new CustomEvent('kgNodeOverPalette', { detail: { over: overPalette } }))
+  }, [leftOffset])
+
+  const handleNodeDragStop = useCallback((event, node) => {
+    window.dispatchEvent(new CustomEvent('kgNodeDragEnd'))
+    commitNodeMoves()
+    // 若拖入左侧面板区域（clientX < leftOffset）则删除节点
+    const bounds = reactFlowWrapper.current?.getBoundingClientRect()
+    const relX = event.clientX - (bounds?.left ?? 0)
+    if (relX < leftOffset && leftOffset > 0) {
+      deleteNode(node.id)
+    }
+  }, [commitNodeMoves, deleteNode, leftOffset])
 
   // ── 拖放创建节点 ───────────────────────────────────────────
   const handleDrop = useCallback((e) => {
@@ -139,7 +170,6 @@ export default function KgCanvas({ leftOffset = 208, rightOffset = 256 }) {
     <div
       ref={reactFlowWrapper}
       className="absolute inset-0 bg-gray-50"
-      style={{ left: leftOffset, right: rightOffset }}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
@@ -151,7 +181,9 @@ export default function KgCanvas({ leftOffset = 208, rightOffset = 256 }) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
-        onNodeDragStop={onNodeDragStop}
+        onNodeDragStart={handleNodeDragStart}
+        onNodeDrag={handleNodeDrag}
+        onNodeDragStop={handleNodeDragStop}
         onSelectionChange={handleSelectionChange}
         onPaneClick={() => select([], null)}
         onPaneDoubleClick={handlePaneDoubleClick}
@@ -175,19 +207,19 @@ export default function KgCanvas({ leftOffset = 208, rightOffset = 256 }) {
           color="#dde3ea"
         />
 
-        {/* 缩放控制按钮（左下角） */}
+        {/* 缩放控制按钮（左下角，偏移避开侧边栏） */}
         <Controls
           showInteractive={false}
-          style={{ bottom: 12, left: 12 }}
+          style={{ bottom: 12, left: leftOffset + 12 }}
         />
 
-        {/* 小地图（右下角）*/}
+        {/* 小地图（右下角，偏移避开属性面板） */}
         <MiniMap
           nodeColor={(n) => NODE_MINIMAP_COLOR[n.type] ?? '#e2e8f0'}
           nodeStrokeWidth={2}
           zoomable
           pannable
-          style={{ bottom: 12, right: 12, border: '1px solid #e2e8f0', borderRadius: 8 }}
+          style={{ bottom: 12, right: rightOffset + 12, border: '1px solid #e2e8f0', borderRadius: 8 }}
         />
 
         {/* 空态提示面板 */}

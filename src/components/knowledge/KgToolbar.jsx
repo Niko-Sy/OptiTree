@@ -3,7 +3,7 @@
  * 样式与 Toolbar.jsx 完全一致（h-14 bg-white border-b）
  */
 import { useRef } from 'react'
-import { Button, Tooltip, Upload, message, Divider } from 'antd'
+import { Button, Tooltip, Upload, message, Divider, Tag } from 'antd'
 import {
   ArrowLeftOutlined, UndoOutlined, RedoOutlined,
   DownloadOutlined, UploadOutlined, ApartmentOutlined,
@@ -112,9 +112,13 @@ export default function KgToolbar({ kgName, kgId }) {
       </Tooltip>
 
       {/* 项目名 */}
-      <span className="font-semibold text-gray-800 text-sm max-w-40 truncate border-r border-gray-200 pr-3 mr-1">
-        {kgName || '知识图谱'}
+      <span className="font-semibold text-gray-800 text-lg max-w-40 truncate  border-gray-200 px-2 ">
+        {kgName || '知识图谱'} 
       </span>
+
+      <Tag color="purple" className="text-xs shrink-0">知识图谱</Tag>
+
+      <span className="mx-1 w-px h-5 bg-gray-200" />
 
       {/* 导入 */}
       <Upload accept=".json" beforeUpload={handleImport} showUploadList={false}>
@@ -128,20 +132,28 @@ export default function KgToolbar({ kgName, kgId }) {
         <Button icon={<DownloadOutlined />} size="small" onClick={handleExport}>导出</Button>
       </Tooltip>
 
-      <Divider type="vertical" className="mx-1" />
+      {/* 另存版本 */}
+      <Tooltip title="另存为版本">
+        <Button icon={<SaveOutlined />} size="small" onClick={handleSaveVersion} />
+      </Tooltip>
+
+      <span className="mx-1 w-px h-5 bg-gray-200" />
 
       {/* 撤销 */}
       <Tooltip title="撤销 (Ctrl+Z)">
-        <Button icon={<UndoOutlined />} size="small" disabled={!canUndo} onClick={undo} />
+        <Button type="text" icon={<UndoOutlined />} size="small" disabled={!canUndo} onClick={undo} />
       </Tooltip>
 
       {/* 重做 */}
       <Tooltip title="重做 (Ctrl+Y)">
-        <Button icon={<RedoOutlined />} size="small" disabled={!canRedo} onClick={redo} />
+        <Button type="text" icon={<RedoOutlined />} size="small" disabled={!canRedo} onClick={redo} />
       </Tooltip>
 
-      <Divider type="vertical" className="mx-1" />
+      
+      <span className="mx-1 w-px h-5 bg-gray-200" />
 
+
+      <div className="ml-auto flex gap-2 items-center justify-center">
       {/* 自动排版 */}
       <Tooltip title="自动排版">
         <Button icon={<ApartmentOutlined />} size="small" onClick={handleLayout}>排版</Button>
@@ -160,10 +172,7 @@ export default function KgToolbar({ kgName, kgId }) {
         </Button>
       </Tooltip>
 
-      {/* 另存版本 */}
-      <Tooltip title="另存为版本">
-        <Button icon={<SaveOutlined />} size="small" onClick={handleSaveVersion} />
-      </Tooltip>
+      
 
       {/* 协作 */}
       <Tooltip title="协作与版本管理">
@@ -178,10 +187,10 @@ export default function KgToolbar({ kgName, kgId }) {
           协作
         </Button>
       </Tooltip>
-
-      {/* 用户头像（右侧推到底） */}
-      <div className="ml-auto">
-        <UserAvatar size={30} />
+      
+      <span className="mx-1 w-px h-5 bg-gray-200" />
+      
+      <UserAvatar size={30} />
       </div>
     </div>
   )
