@@ -4,7 +4,7 @@
  *   KnowledgeStoreProvider > KnowledgeEditorInner
  * 数据通过 localStorage key: optitree_kg_<id> 持久化
  */
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { KnowledgeStoreProvider, useKnowledgeStore, useKnowledgeActions } from '../store/useKnowledgeStore'
 import KgToolbar from '../components/knowledge/KgToolbar'
@@ -12,6 +12,7 @@ import KgCanvas from '../components/knowledge/KgCanvas'
 import KgEntityPalette from '../components/knowledge/KgEntityPalette'
 import KgPropertiesPanel from '../components/knowledge/KgPropertiesPanel'
 import KgStatusBar from '../components/knowledge/KgStatusBar'
+import AIAssistant from '../components/common/AIAssistant'
 
 const KG_LIST_KEY = 'optitree_kg_list'
 
@@ -19,6 +20,12 @@ const KG_LIST_KEY = 'optitree_kg_list'
 function KnowledgeEditorInner({ kgId, kgName }) {
   const { rfNodes, rfEdges } = useKnowledgeStore()
   const { setGraph } = useKnowledgeActions()
+
+  // 为 AI 助手提供当前图数据上下文
+  const getContext = useCallback(() => ({
+    nodes: rfNodes,
+    edges: rfEdges,
+  }), [rfNodes, rfEdges])
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [propsCollapsed, setPropsCollapsed] = useState(false)
   const initDone = useRef(false)
@@ -68,6 +75,7 @@ function KnowledgeEditorInner({ kgId, kgName }) {
         <KgPropertiesPanel collapsed={propsCollapsed} onCollapsedChange={setPropsCollapsed} />
       </div>
       <KgStatusBar />
+      <AIAssistant contextType="knowledgeGraph" getContext={getContext} />
     </div>
   )
 }

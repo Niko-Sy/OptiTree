@@ -1,2 +1,51 @@
 .my-form .ant-form-item { margin-bottom: 8px !important; }
 .my-form .ant-form-item-with-help { margin-bottom: 8px !important; }
+
+/* ─── AI 助手浮动按钮：脉冲波纹动画 ──────────────────────────────── */
+@keyframes ai-pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(1.4); opacity: 0;   }
+}
+
+.ai-pulse-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #1677ff;
+  animation: ai-pulse-ring 3s ease-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.ai-pulse-ring-delay {
+  animation-delay: 1.2s;
+}
+
+/* ─── AI 助手对话面板：向上滑入动画 ──────────────────────────────── */
+@keyframes ai-panel-enter {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)     scale(1);    }
+}
+
+.ai-panel-enter {
+  animation: ai-panel-enter 0.25s ease-out forwards;
+}
+
+/* ─── AI 助手闲置气泡：从右向左滑入（按钮在右侧时） ────────────── */
+@keyframes ai-bubble-enter-left {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0);     }
+}
+/* ─── AI 助手闲置气泡：从左向右滑入（按钮在左侧时） ────────────── */
+@keyframes ai-bubble-enter-right {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0);      }
+}
+
+.ai-bubble-enter-left  { animation: ai-bubble-enter-left  0.2s ease-out forwards; }
+.ai-bubble-enter-right { animation: ai-bubble-enter-right 0.2s ease-out forwards; }
+
+/* keep legacy alias */
+.ai-bubble-enter {
+  animation: ai-bubble-enter 0.2s ease-out forwards;
+}

@@ -175,6 +175,75 @@ export async function listVersions(projectId) {
   }
 }
 
+// ─── 6. AI 对话问答 ─────────────────────────────────────────────────
+/**
+ * 向 AI 助手发送消息，携带当前图的上下文
+ * @param {object} contextData  - 当前图的 JSON 数据 { nodes, edges }
+ * @param {'faultTree'|'knowledgeGraph'} contextType - 图类型
+ * @param {string} userMessage  - 用户提问文本
+ * @returns {Promise<{ reply: string }>}
+ *
+ * TODO: 替换为实际后端接口
+ * POST /api/ai/chat
+ * Body: { context: contextData, type: contextType, message: userMessage }
+ */
+export async function chatWithAI(contextData, contextType, userMessage) {
+  await delay(1200)
+  console.log('[aiService] chatWithAI', { contextType, userMessage, nodeCount: contextData?.nodes?.length })
+
+  // TODO: const res = await fetch(`${BASE_URL}/ai/chat`, {
+  // TODO:   method: 'POST',
+  // TODO:   headers: { 'Content-Type': 'application/json' },
+  // TODO:   body: JSON.stringify({
+  // TODO:     context: contextData,
+  // TODO:     type: contextType,
+  // TODO:     message: userMessage,
+  // TODO:   }),
+  // TODO: })
+  // TODO: return res.json()  // { reply: string }
+
+  // Mock 回复
+  const nodeCount = contextData?.nodes?.length ?? 0
+  const edgeCount = contextData?.edges?.length ?? 0
+  const mockReplies = {
+    faultTree: [
+      `当前故障树包含 ${nodeCount} 个节点、${edgeCount} 条边。从结构来看，建议检查所有中间事件是否都连接了逻辑门，确保故障传播路径完整。`,
+      `基于当前 ${nodeCount} 个节点的故障树，共有 ${edgeCount} 条逻辑关系。建议为基本事件补充概率数值，以便后续进行定量分析（如最小割集计算）。`,
+      `故障树结构分析完毕。当前共 ${nodeCount} 节点，拓扑深度较浅，可考虑进一步细化中间事件，提高分析精度。`,
+    ],
+    knowledgeGraph: [
+      `当前知识图谱包含 ${nodeCount} 个实体节点和 ${edgeCount} 条关系边。建议检查孤立节点（无关系的实体），它们可能影响图谱完整性。`,
+      `基于当前图谱的 ${edgeCount} 条关系，实体之间的连接密度为 ${nodeCount > 0 ? (edgeCount / nodeCount).toFixed(2) : 0}。建议补充关键实体间的语义关系，增强推理能力。`,
+      `知识图谱分析完成。现有 ${nodeCount} 个实体，可考虑按实体类型（组件/事件/原因）分层聚类，以优化可读性。`,
+    ],
+  }
+  const pool = mockReplies[contextType] ?? mockReplies.faultTree
+  return { reply: pool[Math.floor(Math.random() * pool.length)] }
+}
+
+/**
+ * 获取快捷提问列表（纯前端，无需 API）
+ * @param {'faultTree'|'knowledgeGraph'} contextType
+ * @returns {{ id: string, label: string, question: string }[]}
+ */
+export function getQuickQuestions(contextType) {
+  const questions = {
+    faultTree: [
+      { id: 'q1', label: '🔍 结构分析', question: '分析当前故障树的结构，找出潜在的逻辑缺陷或不完整路径' },
+      { id: 'q2', label: '⚠️ 风险预警', question: '识别故障树中概率最高的失效路径，给出风险等级评估' },
+      { id: 'q3', label: '📊 最小割集', question: '计算或估算当前故障树的最小割集，列出关键失效组合' },
+      { id: 'q4', label: '✅ 完整性检查', question: '检查是否存在孤立节点或未连接的逻辑门，给出修复建议' },
+    ],
+    knowledgeGraph: [
+      { id: 'q1', label: '🔍 关系分析', question: '分析当前知识图谱中各实体间的核心关系，找出关键路径' },
+      { id: 'q2', label: '🕸️ 孤立节点', question: '检测图谱中是否存在孤立实体节点，并给出补充建议' },
+      { id: 'q3', label: '📈 密度评估', question: '评估当前知识图谱的连接密度，给出优化建议' },
+      { id: 'q4', label: '🏷️ 实体分类', question: '对现有实体进行分类统计，分析各类型实体的分布情况' },
+    ],
+  }
+  return questions[contextType] ?? questions.faultTree
+}
+
 /**
  * 保存项目快照为新版本
  * @param {string} projectId

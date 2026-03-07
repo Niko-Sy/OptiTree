@@ -81,7 +81,7 @@ export default function Profile() {
         <Button
           icon={<ArrowLeftOutlined />}
           type="text"
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate(-1)}
           className="mb-4"
         >
           返回仪表盘

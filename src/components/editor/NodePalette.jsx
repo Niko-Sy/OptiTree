@@ -153,6 +153,7 @@ export default function NodePalette() {
       onDragLeave={onPaletteDragLeave}
     >
       {/* Floating toggle button — protrudes from right edge */}
+      {!isDraggingCanvas && (
       <button
         onClick={() => setCollapsed(c => !c)}
         title={collapsed ? '展开节点库' : '收起节点库'}
@@ -176,6 +177,7 @@ export default function NodePalette() {
           }
         </svg>
       </button>
+      )}
 
       {/* Panel content — hidden when collapsed */}
       {!collapsed && (

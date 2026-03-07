@@ -1,5 +1,5 @@
 // 画布组件，负责渲染节点和连线，处理节点拖动、连线创建、画布缩放等交互
-import { useRef, useCallback, memo, useState, useEffect } from 'react'
+import { useRef, useCallback, memo, useState, useEffect, useMemo } from 'react'
 import { Tooltip, message } from 'antd'
 import {
   ArrowsAltOutlined, DragOutlined, LinkOutlined,
@@ -18,6 +18,7 @@ const ZOOM_STEP = 0.12
 const FaultNode = memo(function FaultNode({
   node, selected, multiSelected, isConnectFrom, mode,
   onMouseDown, onClick, onMouseEnter, onMouseLeave, onContextMenu, onDragStart,
+  hasChildren, isCollapsed, onToggleCollapse,
 }) {
   const typeClass = {
     topEvent: 'top-event', midEvent: 'mid-event',
@@ -57,6 +58,46 @@ const FaultNode = memo(function FaultNode({
       onMouseLeave={() => onMouseLeave()}
       onDragStart={e => onDragStart(e, node)}
     >
+      {/* Expand/collapse button for topEvent and midEvent nodes with children */}
+      {(node.type === 'topEvent' || node.type === 'midEvent') && hasChildren && (
+        <button
+          style={{
+            position: 'absolute',
+            top: node.type === 'topEvent' ? -5 : -10,
+            right: node.type === 'topEvent' ? 10 : -10,
+            width: 16,
+            height: 16,
+            borderRadius: '50%',
+            border: `1px solid ${isCollapsed ? '#1677ff' : '#94a3b8'}`,
+            background: isCollapsed ? '#eff6ff' : '#fff',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            lineHeight: 1,
+            fontWeight: 700,
+            color: isCollapsed ? '#1677ff' : '#64748b',
+            zIndex: 5,
+            // boxShadow: '0 1px 2px rgba(0,0,0,0.18)',
+            padding: 0,
+            flexShrink: 0,
+          }}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); onToggleCollapse(node.id) }}
+          title={isCollapsed ? '展开子节点' : '收起子节点'}
+        >
+          {isCollapsed ? (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M5 2V8M2 5H8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2 5H8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            )}
+        </button>
+      )}
       {gateLabel ? (
         <>
           <GateSymbol gateLabel={gateLabel} size={node.width * 0.72} />
@@ -245,6 +286,17 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
   const [mode, setMode] = useState('select')
   const modeRef = useRef('select')
   useEffect(() => { modeRef.current = mode }, [mode])
+
+  const [collapsedNodes, setCollapsedNodes] = useState(new Set())
+
+  const toggleCollapse = useCallback((nodeId) => {
+    setCollapsedNodes(prev => {
+      const next = new Set(prev)
+      if (next.has(nodeId)) next.delete(nodeId)
+      else next.add(nodeId)
+      return next
+    })
+  }, [])
 
   const [connectFrom, setConnectFrom] = useState(null)
   const connectFromRef = useRef(null)
@@ -637,6 +689,42 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
   const nodeMap = {}
   state.nodes.forEach(n => { nodeMap[n.id] = n })
 
+  // Build children map (from→[to]) for hasChildren and hidden computation
+  const childrenMap = useMemo(() => {
+    const map = {}
+    state.edges.forEach(e => {
+      if (!map[e.from]) map[e.from] = []
+      map[e.from].push(e.to)
+    })
+    return map
+  }, [state.edges])
+
+  // Compute hidden node IDs: all transitive descendants of collapsed nodes
+  const hiddenNodeIds = useMemo(() => {
+    const hidden = new Set()
+    if (collapsedNodes.size === 0) return hidden
+    function collectDescendants(nodeId) {
+      const children = childrenMap[nodeId] || []
+      children.forEach(childId => {
+        if (!hidden.has(childId)) {
+          hidden.add(childId)
+          collectDescendants(childId)
+        }
+      })
+    }
+    collapsedNodes.forEach(nodeId => collectDescendants(nodeId))
+    return hidden
+  }, [childrenMap, collapsedNodes])
+
+  const visibleNodes = useMemo(
+    () => state.nodes.filter(n => !hiddenNodeIds.has(n.id)),
+    [state.nodes, hiddenNodeIds]
+  )
+  const visibleEdges = useMemo(
+    () => state.edges.filter(e => !hiddenNodeIds.has(e.from) && !hiddenNodeIds.has(e.to)),
+    [state.edges, hiddenNodeIds]
+  )
+
   // Listen for multi-delete event from ContextMenu
   useEffect(() => {
     const handler = (e) => { deleteNodes(e.detail) }
@@ -666,7 +754,7 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
       {/* SVG layer: edges + temp line + connection ports + lasso */}
       <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 5, overflow: 'visible', pointerEvents: 'none' }}>
         <g transform={`translate(${vt.x},${vt.y}) scale(${vt.scale})`}>
-          {state.edges.map(edge => (
+          {visibleEdges.map(edge => (
             <EdgePath key={edge.id} edge={edge} nodeMap={nodeMap}
               selected={state.selectedEdgeId === edge.id} onClick={selectEdge} onContextMenu={onEdgeContextMenu}
               onMidMouseDown={onEdgeMidMouseDown} />
@@ -687,7 +775,7 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
             />
           )}
 
-          {mode === 'connect' && state.nodes.map(node => (
+          {mode === 'connect' && visibleNodes.map(node => (
             <g key={`port-${node.id}`} style={{ pointerEvents: 'all' }}>
               <circle cx={node.x} cy={node.y} r={5}
                 fill={hoveredNodeId === node.id ? '#1677ff' : '#fff'}
@@ -707,7 +795,7 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
         className="absolute top-0 left-0 origin-top-left"
         style={{ transform: `translate(${vt.x}px,${vt.y}px) scale(${vt.scale})`, zIndex: 10 }}
       >
-        {state.nodes.map(node => (
+        {visibleNodes.map(node => (
           <FaultNode
             key={node.id} node={node}
             selected={state.selectedNodeId === node.id}
@@ -720,6 +808,9 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
             onMouseEnter={setHoveredNodeId}
             onMouseLeave={() => setHoveredNodeId(null)}
             onDragStart={onNodeDragStart}
+            hasChildren={!!(childrenMap[node.id] && childrenMap[node.id].length > 0)}
+            isCollapsed={collapsedNodes.has(node.id)}
+            onToggleCollapse={toggleCollapse}
           />
         ))}
       </div>

@@ -1,5 +1,5 @@
 // 故障树编辑器页面，包含画布、工具栏、属性面板等组件，并处理项目数据的加载和保存
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { EditorStoreProvider, useEditorStore, useEditorActions } from '../store/useEditorStore'
 import Toolbar from '../components/editor/Toolbar'
@@ -8,6 +8,7 @@ import Canvas from '../components/editor/Canvas'
 import PropertiesPanel from '../components/editor/PropertiesPanel'
 import StatusBar from '../components/editor/StatusBar'
 import { computeLayout } from '../utils/layoutAlgorithm'
+import AIAssistant from '../components/common/AIAssistant'
 
 const STORAGE_KEY = 'optitree_projects'
 
@@ -15,6 +16,12 @@ const STORAGE_KEY = 'optitree_projects'
 function EditorInner({ projectId, projectName }) {
   const { state } = useEditorStore()
   const { setGraph } = useEditorActions()
+
+  // 为 AI 助手提供当前图数据上下文
+  const getContext = useCallback(() => ({
+    nodes: state.nodes,
+    edges: state.edges,
+  }), [state.nodes, state.edges])
   const canvasWidthRef = useRef(null)
   const [propsPanelCollapsed, setPropsPanelCollapsed] = useState(false)
   const rightOffset = propsPanelCollapsed ? 0 : 256
@@ -70,6 +77,7 @@ function EditorInner({ projectId, projectName }) {
         <PropertiesPanel collapsed={propsPanelCollapsed} onCollapsedChange={setPropsPanelCollapsed} />
       </div>
       <StatusBar />
+      <AIAssistant contextType="faultTree" getContext={getContext} />
     </div>
   )
 }

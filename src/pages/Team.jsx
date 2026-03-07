@@ -101,7 +101,7 @@ export default function Team() {
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-30">
         <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Button icon={<ArrowLeftOutlined />} type="text" onClick={() => navigate('/dashboard')} />
+            <Button icon={<ArrowLeftOutlined />} type="text" onClick={() => navigate(-1)} />
             <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
               <TeamOutlined style={{ color: '#1677ff', fontSize: 16 }} />
             </div>

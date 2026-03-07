@@ -167,7 +167,7 @@ export default function Collaboration() {
             <Button
               icon={<ArrowLeftOutlined />}
               type="text"
-              onClick={() => navigate('/dashboard')}
+              onClick={() => navigate(-1)}
             />
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isKg ? 'bg-purple-100' : 'bg-blue-100'}`}>
               {isKg
