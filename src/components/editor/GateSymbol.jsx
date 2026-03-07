@@ -1,3 +1,4 @@
+
 // Shared gate configuration & SVG symbol component
 // Used by both NodePalette (list icons) and Canvas (rendered nodes)
 

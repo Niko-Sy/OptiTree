@@ -1,3 +1,4 @@
+// 仪表盘页面，显示项目统计信息、项目列表和新建项目功能
 import { useState, useEffect } from 'react'
 import { Button, Input, Empty, Statistic, Row, Col, Divider } from 'antd'
 import {

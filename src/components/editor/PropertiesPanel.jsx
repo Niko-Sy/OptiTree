@@ -1,3 +1,4 @@
+// 属性面板组件，显示选中节点或连线的详细属性，并允许编辑
 import { useEffect } from 'react'
 import { Form, Input, Select, Button, Alert, Empty, Divider, Tag, InputNumber, Tooltip } from 'antd'
 import { DeleteOutlined, SaveOutlined, RobotOutlined, DisconnectOutlined, InfoCircleOutlined } from '@ant-design/icons'
@@ -198,13 +199,13 @@ function NodePanel() {
             {selected.description && (
               <div>
                 <span className="text-gray-400">描述</span>
-                <p className="mt-0.5 text-gray-600 break-words">{selected.description}</p>
+                <p className="mt-0.5 text-gray-600 wrap-break-word">{selected.description}</p>
               </div>
             )}
             {selected.investigateMethod && (
               <div>
                 <span className="text-gray-400">排查方法</span>
-                <p className="mt-0.5 text-gray-600 break-words">{selected.investigateMethod}</p>
+                <p className="mt-0.5 text-gray-600 wrap-break-word">{selected.investigateMethod}</p>
               </div>
             )}
             {selected.rules && selected.rules.length > 0 && (

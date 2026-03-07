@@ -1,3 +1,4 @@
+// 项目卡片组件，显示项目基本信息和操作按钮
 import { Card, Button, Tag, Popconfirm, Tooltip } from 'antd'
 import {
   FolderOpenOutlined, DeleteOutlined, ClockCircleOutlined,

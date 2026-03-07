@@ -1,3 +1,4 @@
+// 新建项目的模态框组件，包含项目名称输入和模板选择功能
 import { Modal, Form, Input, Select } from 'antd'
 
 const TEMPLATE_OPTIONS = [

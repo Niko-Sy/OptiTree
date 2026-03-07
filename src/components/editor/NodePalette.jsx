@@ -1,3 +1,4 @@
+// 节点库组件，显示可拖拽的节点类型列表，并处理从画布拖回删除的交互
 import { useState, useEffect } from 'react'
 import { GateSymbol, GATE_CONFIG } from './GateSymbol'
 import { useEditorActions } from '../../store/useEditorStore'

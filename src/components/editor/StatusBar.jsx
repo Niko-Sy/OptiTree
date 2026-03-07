@@ -1,3 +1,4 @@
+// 状态栏组件，显示节点数、连接数、历史记录位置，以及 AI 校验结果
 import { useEditorStore } from '../../store/useEditorStore'
 import { CheckCircleOutlined, WarningOutlined } from '@ant-design/icons'
 

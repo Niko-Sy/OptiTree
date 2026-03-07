@@ -1,3 +1,4 @@
+// 故障树编辑器页面，包含画布、工具栏、属性面板等组件，并处理项目数据的加载和保存
 import { useRef, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { EditorStoreProvider, useEditorStore, useEditorActions } from '../store/useEditorStore'

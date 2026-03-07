@@ -1,3 +1,4 @@
+// 编辑器顶部工具栏组件，包含项目名称、导入/导出、撤销/重做、自动排版、AI 校验等功能按钮
 import { useRef } from 'react'
 import { Button, Tooltip, message, Upload } from 'antd'
 import {
@@ -235,7 +236,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
 
       <span className="mx-1 w-px h-5 bg-gray-200" />
 
-      <div className="ml-auto flex gap-2">
+      <div className="ml-auto flex gap-2 items-center justify-center">
         {/* Auto Layout */}
         <Tooltip title="BFS 树形自动排版">
           <Button
@@ -259,7 +260,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
           </Button>
         </Tooltip>
 
-        <span className="ml-2 w-px h-5 bg-gray-200" />
+        <span className="mx-2 w-px h-5 bg-gray-200" />
 
         <UserAvatar size={30} />
       </div>

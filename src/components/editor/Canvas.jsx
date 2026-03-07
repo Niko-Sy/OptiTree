@@ -1,3 +1,4 @@
+// 画布组件，负责渲染节点和连线，处理节点拖动、连线创建、画布缩放等交互
 import { useRef, useCallback, memo, useState, useEffect } from 'react'
 import { Tooltip, message } from 'antd'
 import {
@@ -221,7 +222,7 @@ function ContextMenu({ menu, onClose, state, deleteEdge, deleteNode, onCopy, onP
 
   return (
     <div
-      className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-48 z-[9999]"
+      className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-48 z-9999"
       style={{ left, top }}
       onMouseDown={e => e.stopPropagation()}
       onContextMenu={e => e.preventDefault()}
