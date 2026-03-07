@@ -149,7 +149,7 @@ export default function Team() {
 
         {/* 列表区域 */}
         <div className="flex items-center justify-between mb-4">
-          <Title level={5} className="!mb-0 text-gray-800">项目协作管理</Title>
+          <Title level={5} className="mb-0! text-gray-800">项目协作管理</Title>
           <Input
             prefix={<SearchOutlined className="text-gray-400" />}
             placeholder="搜索项目名称..."

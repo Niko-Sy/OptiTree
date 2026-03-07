@@ -75,7 +75,7 @@ export default function Profile() {
     : '—'
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
+    <div className="min-h-screen bg-linear-to-br from-blue-50 via-white to-indigo-50">
       {/* 顶部栏 */}
       <div className="max-w-2xl mx-auto px-6 pt-6">
         <Button
