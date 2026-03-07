@@ -134,7 +134,9 @@ export default function KgToolbar({ kgName, kgId }) {
 
       {/* 另存版本 */}
       <Tooltip title="另存为版本">
-        <Button icon={<SaveOutlined />} size="small" onClick={handleSaveVersion} />
+        <Button icon={<SaveOutlined />} size="small" onClick={handleSaveVersion} >
+          另存
+        </Button>
       </Tooltip>
 
       <span className="mx-1 w-px h-5 bg-gray-200" />

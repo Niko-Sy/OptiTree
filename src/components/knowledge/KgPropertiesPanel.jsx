@@ -129,8 +129,8 @@ export default function KgPropertiesPanel({ collapsed, onCollapsedChange }) {
 
           {/* ── 节点属性 ── */}
           {selectedNode && (
-            <Form form={form} layout="vertical" size="small">
-              <Form.Item label="节点 ID">
+            <Form form={form} layout="vertical" size="small" className="my-form">
+              <Form.Item label="节点 ID" >
                 <Input value={selectedNode.id} disabled size="small" />
               </Form.Item>
 
@@ -228,17 +228,17 @@ export default function KgPropertiesPanel({ collapsed, onCollapsedChange }) {
 
           {/* ── 边属性 ── */}
           {selectedEdge && !selectedNode && (
-            <Form form={form} layout="vertical" size="small">
+            <Form form={form} layout="vertical" size="small" className="my-form">
               <Form.Item label="连线 ID">
                 <Input value={selectedEdge.id} disabled size="small" />
               </Form.Item>
 
-              <Text className="text-xs text-gray-500 block mb-3">
-                <span className="font-medium">
+              <Text className="text-xs text-gray-500 block mt-4 mb-3">
+                <span className="font-small bg-blue-400/40 px-1.5 rounded text-blue-700 py-0.5">
                   {rfNodes.find(n => n.id === selectedEdge.source)?.data?.label ?? selectedEdge.source}
                 </span>
                 {' → '}
-                <span className="font-medium">
+                <span className="font-small bg-green-400/40 px-1.5 rounded text-green-700 py-0.5">
                   {rfNodes.find(n => n.id === selectedEdge.target)?.data?.label ?? selectedEdge.target}
                 </span>
               </Text>

@@ -117,7 +117,7 @@ export default function KgEntityPalette({ collapsed, onCollapsedChange }) {
               <div
                 draggable
                 onDragStart={e => handleDragStart(e, type)}
-                className="flex items-center gap-1 px-2 py-3 rounded-lg border-1 border-gray-200 cursor-grab bg-white hover:border-blue-400 active:cursor-grabbing select-none transition-colors"
+                className="flex items-center gap-1 px-2 py-3 rounded-lg border border-gray-200 cursor-grab bg-white hover:border-blue-400 active:cursor-grabbing select-none transition-colors"
               >
                 <div
                   className="ml-1 w-10 h-8 rounded border-2 flex items-center justify-center text-xs font-bold shrink-0 "
