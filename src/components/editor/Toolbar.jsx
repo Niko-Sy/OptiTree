@@ -3,9 +3,11 @@ import { useRef } from 'react'
 import { Button, Tooltip, message, Upload } from 'antd'
 import {
   UndoOutlined, RedoOutlined, DownloadOutlined, UploadOutlined,
-  ApartmentOutlined, RobotOutlined, ArrowLeftOutlined,
+  ApartmentOutlined, RobotOutlined, ArrowLeftOutlined, SaveOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { saveVersion } from '../../services/aiService'
 import UserAvatar from '../common/UserAvatar'
 import { useEditorStore, useEditorActions } from '../../store/useEditorStore'
 import { computeLayout } from '../../utils/layoutAlgorithm'
@@ -108,6 +110,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
   const { state } = useEditorStore()
   const { setGraph, setAiIssues, undo, redo } = useEditorActions()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const fileInputRef = useRef(null)
 
   const canUndo = state.historyIndex > 0
@@ -193,6 +196,19 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
     }
   }
 
+  async function handleSaveVersion() {
+    const projectId = searchParams.get('id')
+    if (!projectId) { message.warning('无法获取项目 ID'); return }
+    if (state.nodes.length === 0) { message.warning('画布为空，无法保存版本'); return }
+    try {
+      const snapshot = { nodes: state.nodes, edges: state.edges }
+      const ver = await saveVersion(projectId, snapshot)
+      message.success(`版本 ${ver.label} 已保存`)
+    } catch {
+      message.error('版本保存失败')
+    }
+  }
+
   return (
     <div className="flex items-center gap-2 px-4 h-14 bg-white border-b border-gray-200 shrink-0 z-20">
       {/* Back */}
@@ -245,6 +261,32 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
             onClick={handleAutoLayout}
           >
             自动排版
+          </Button>
+        </Tooltip>
+
+        {/* Collaboration */}
+        <Tooltip title="协作与版本管理">
+          <Button
+            icon={<TeamOutlined />}
+            size="small"
+            onClick={() => {
+              const id = searchParams.get('id')
+              if (id) navigate(`/collaboration?id=${id}&type=ft`)
+              else message.warning('请先保存项目')
+            }}
+          >
+            协作
+          </Button>
+        </Tooltip>
+
+        {/* Save Version */}
+        <Tooltip title="另存为版本快照">
+          <Button
+            icon={<SaveOutlined />}
+            size="small"
+            onClick={handleSaveVersion}
+          >
+            另存版本
           </Button>
         </Tooltip>
 

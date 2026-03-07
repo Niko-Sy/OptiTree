@@ -11,7 +11,7 @@ import { Avatar, Dropdown, message } from 'antd'
 import {
   UserOutlined, SettingOutlined, LogoutOutlined,
   KeyOutlined, BellOutlined, QuestionCircleOutlined,
-  UserSwitchOutlined, FileProtectOutlined,
+  FileProtectOutlined, TeamOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/useAuthStore'
 
@@ -72,7 +72,7 @@ export default function UserAvatar({ size = 32, theme = 'light' }) {
       key: 'my-profile',
       icon: <UserOutlined />,
       label: '个人资料',
-      onClick: () => message.info('个人资料页即将上线'), // TODO: navigate('/profile')
+      onClick: () => navigate('/profile'),
     },
     {
       key: 'notifications',
@@ -97,16 +97,16 @@ export default function UserAvatar({ size = 32, theme = 'light' }) {
       key: 'change-password',
       icon: <KeyOutlined />,
       label: '修改密码',
-      onClick: () => message.info('修改密码功能即将上线'), // TODO: open modal / navigate
+      onClick: () => navigate('/profile'),  // 跳转到 Profile 页安全设置卡
     },
     { type: 'divider' },
 
     // 其他功能
     {
       key: 'access-control',
-      icon: <UserSwitchOutlined />,
+      icon: <TeamOutlined />,
       label: '团队协作',
-      onClick: () => message.info('团队协作功能即将上线'), // TODO: navigate('/team')
+      onClick: () => navigate('/team'),
     },
     {
       key: 'audit-log',
@@ -140,7 +140,7 @@ export default function UserAvatar({ size = 32, theme = 'light' }) {
       menu={{ items: menuItems }}
       trigger={['click']}
       placement="bottomRight"
-      overlayStyle={{ minWidth: 200 }}
+      styles={{ root: { minWidth: 200 } }}
       arrow={{ pointAtCenter: true }}
     >
       <button

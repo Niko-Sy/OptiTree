@@ -1,5 +1,6 @@
-﻿import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { App as AntApp, ConfigProvider } from "antd";
+﻿import { lazy, Suspense } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { App as AntApp, ConfigProvider, Spin } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import Dashboard from "./pages/Dashboard";
 import FaultTreeEditor from "./pages/FaultTreeEditor";
@@ -7,6 +8,20 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import { AuthProvider, useAuth } from "./store/useAuthStore";
 import "./App.css";
+
+// ─── 懒加载新页面 ──────────────────────────────────────────────────
+const KnowledgeGraphEditor = lazy(() => import('./pages/KnowledgeGraphEditor'))
+const Collaboration = lazy(() => import('./pages/Collaboration'))
+const Profile = lazy(() => import('./pages/Profile'))
+const Team = lazy(() => import('./pages/Team'))
+
+function PageLoading() {
+  return (
+    <div className="h-screen flex items-center justify-center bg-gray-50">
+      <Spin size="large" tip="加载中..." />
+    </div>
+  )
+}
 
 const antTheme = {
   token: {
@@ -53,6 +68,46 @@ export default function App() {
               <Route
                 path="/editor"
                 element={<RequireAuth><FaultTreeEditor /></RequireAuth>}
+              />
+              <Route
+                path="/knowledge"
+                element={
+                  <RequireAuth>
+                    <Suspense fallback={<PageLoading />}>
+                      <KnowledgeGraphEditor />
+                    </Suspense>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/collaboration"
+                element={
+                  <RequireAuth>
+                    <Suspense fallback={<PageLoading />}>
+                      <Collaboration />
+                    </Suspense>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/profile"
+                element={
+                  <RequireAuth>
+                    <Suspense fallback={<PageLoading />}>
+                      <Profile />
+                    </Suspense>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/team"
+                element={
+                  <RequireAuth>
+                    <Suspense fallback={<PageLoading />}>
+                      <Team />
+                    </Suspense>
+                  </RequireAuth>
+                }
               />
             </Routes>
           </BrowserRouter>

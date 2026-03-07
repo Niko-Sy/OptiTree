@@ -1,15 +1,20 @@
 // 仪表盘页面，显示项目统计信息、项目列表和新建项目功能
 import { useState, useEffect } from 'react'
-import { Button, Input, Empty, Statistic, Row, Col, Divider } from 'antd'
+import { useNavigate } from 'react-router-dom'
+import { Button, Input, Empty, Statistic, Row, Col, Divider, Dropdown, Tabs, message } from 'antd'
 import {
   PlusOutlined, SearchOutlined, ApartmentOutlined,
-  ProjectOutlined, FundOutlined,
+  ProjectOutlined, FundOutlined, ApiOutlined,
+  UploadOutlined, ThunderboltOutlined, DownOutlined,
 } from '@ant-design/icons'
 import ProjectCard from '../components/dashboard/ProjectCard'
 import NewProjectModal from '../components/dashboard/NewProjectModal'
+import NewKnowledgeGraphModal from '../components/dashboard/NewKnowledgeGraphModal'
+import DocumentUploadModal from '../components/dashboard/DocumentUploadModal'
 import UserAvatar from '../components/common/UserAvatar'
 
 const STORAGE_KEY = 'optitree_projects'
+const KG_STORAGE_KEY = 'optitree_kg_list'
 
 // ─── Template preset graphs ───────────────────────────────────────
 const TEMPLATES = {
@@ -75,28 +80,45 @@ function saveProjects(projects) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
 }
 
+function loadKgList() {
+  try {
+    return JSON.parse(localStorage.getItem(KG_STORAGE_KEY) || '[]')
+  } catch {
+    return []
+  }
+}
+
+function saveKgList(list) {
+  localStorage.setItem(KG_STORAGE_KEY, JSON.stringify(list))
+}
+
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [projects, setProjects] = useState(loadProjects)
+  const [kgList, setKgList] = useState(loadKgList)
   const [search, setSearch] = useState('')
+  const [activeTab, setActiveTab] = useState('ft')
   const [showModal, setShowModal] = useState(false)
+  const [showKgModal, setShowKgModal] = useState(false)
+  const [docUploadTarget, setDocUploadTarget] = useState(null) // 'faultTree' | 'knowledge' | null
 
-  useEffect(() => {
-    saveProjects(projects)
-  }, [projects])
+  useEffect(() => { saveProjects(projects) }, [projects])
+  useEffect(() => { saveKgList(kgList) }, [kgList])
 
+  // ─── 创建故障树项目 ───────────────────────────────────────────
   function handleCreateProject({ name, template }) {
     const id = `proj_${Date.now()}`
     const tpl = TEMPLATES[template]
     const newProject = {
       id,
       name,
+      type: 'ft',
       createdAt: new Date().toISOString(),
       nodeCount: tpl ? tpl.nodes.length : 0,
       edgeCount: tpl ? tpl.edges.length : 0,
       tags: tpl ? tpl.tags : [],
     }
     if (tpl) {
-      // Pre-populate localStorage with template graph (layout applied in editor on first open)
       const nodes = tpl.nodes.map(n => ({ width: 120, height: 60, x: 0, y: 0, ...n }))
       localStorage.setItem(`optitree_data_${id}`, JSON.stringify({ nodes, edges: tpl.edges }))
     }
@@ -104,17 +126,106 @@ export default function Dashboard() {
     setShowModal(false)
   }
 
-  function handleDeleteProject(id) {
-    setProjects(prev => prev.filter(p => p.id !== id))
-    // Also remove project data
-    localStorage.removeItem(`optitree_data_${id}`)
+  // ─── 创建空白知识图谱 ─────────────────────────────────────────
+  function handleCreateKg(kg) {
+    setKgList(prev => [kg, ...prev])
+    setShowKgModal(false)
+    navigate(`/knowledge?id=${kg.id}`)
   }
 
-  const filtered = projects.filter(p =>
+  // ─── 文档上传完成后跳转 ───────────────────────────────────────
+  function handleDocUploadComplete(result) {
+    setDocUploadTarget(null)
+    if (result?.projectId) {
+      // AI 生成图谱 → 写入 projects
+      const id = result.projectId
+      const newProject = {
+        id,
+        name: '（AI 生成）故障树',
+        type: 'ft',
+        createdAt: new Date().toISOString(),
+        nodeCount: result.nodes?.length ?? 0,
+        edgeCount: result.edges?.length ?? 0,
+        tags: ['AI生成'],
+      }
+      localStorage.setItem(`optitree_data_${id}`, JSON.stringify({
+        nodes: (result.nodes ?? []).map(n => ({ ...n, width: n.width ?? 120, height: n.height ?? 60 })),
+        edges: result.edges ?? [],
+      }))
+      setProjects(prev => [newProject, ...prev])
+      navigate(`/editor?id=${id}`)
+    } else if (result?.kgId) {
+      const kg = {
+        id: result.kgId,
+        name: '（AI 生成）知识图谱',
+        type: 'kg',
+        createdAt: new Date().toISOString(),
+        entityCount: result.entityCount ?? 0,
+        relationCount: result.relationCount ?? 0,
+        tags: ['AI生成'],
+        description: '',
+      }
+      localStorage.setItem(`optitree_kg_${result.kgId}`, JSON.stringify({
+        rfNodes: result.nodes ?? [],
+        rfEdges: result.edges ?? [],
+      }))
+      setKgList(prev => [kg, ...prev])
+      navigate(`/knowledge?id=${result.kgId}`)
+    }
+  }
+
+  // ─── 删除 ──────────────────────────────────────────────────────
+  function handleDeleteProject(id) {
+    setProjects(prev => prev.filter(p => p.id !== id))
+    localStorage.removeItem(`optitree_data_${id}`)
+    localStorage.removeItem(`optitree_versions_${id}`)
+  }
+
+  function handleDeleteKg(id) {
+    setKgList(prev => prev.filter(k => k.id !== id))
+    localStorage.removeItem(`optitree_kg_${id}`)
+    localStorage.removeItem(`optitree_versions_${id}`)
+  }
+
+  // ─── Dropdown 菜单项 ──────────────────────────────────────────
+  const newMenuItems = [
+    {
+      key: 'ft',
+      icon: <ApartmentOutlined />,
+      label: '新建故障树',
+      onClick: () => setShowModal(true),
+    },
+    {
+      key: 'doc-ft',
+      icon: <UploadOutlined />,
+      label: '文档 → 故障树（AI 生成）',
+      onClick: () => { setDocUploadTarget('faultTree'); setActiveTab('ft') },
+    },
+    { type: 'divider' },
+    {
+      key: 'doc-kg',
+      icon: <ThunderboltOutlined />,
+      label: '文档 → 知识图谱（AI 生成）',
+      onClick: () => { setDocUploadTarget('knowledge'); setActiveTab('kg') },
+    },
+    {
+      key: 'kg',
+      icon: <ApiOutlined />,
+      label: '新建空白知识图谱',
+      onClick: () => setShowKgModal(true),
+    },
+  ]
+
+  // ─── 当前 tab 的过滤数据 ──────────────────────────────────────
+  const ftFiltered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase())
+  )
+  const kgFiltered = kgList.filter(k =>
+    k.name.toLowerCase().includes(search.toLowerCase())
   )
 
   const totalNodes = projects.reduce((s, p) => s + (p.nodeCount || 0), 0)
+  const totalEntities = kgList.reduce((s, k) => s + (k.entityCount || 0), 0)
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -129,13 +240,11 @@ export default function Dashboard() {
             <span className="text-xs text-gray-400 border border-gray-200 rounded px-1.5 py-0.5">故障树可视化系统</span>
           </div>
           <div className="flex items-center gap-3">
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => setShowModal(true)}
-            >
-              新建项目
-            </Button>
+            <Dropdown menu={{ items: newMenuItems }} trigger={['click']}>
+              <Button type="primary" icon={<PlusOutlined />}>
+                新建 <DownOutlined className="text-xs" />
+              </Button>
+            </Dropdown>
             <UserAvatar size={34} />
           </div>
         </div>
@@ -144,36 +253,43 @@ export default function Dashboard() {
       <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-8">
         {/* Stats */}
         <Row gutter={16} className="mb-8">
-          <Col span={8}>
+          <Col span={6}>
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
-                title={<span className="text-gray-500 text-sm">项目总数</span>}
+                title={<span className="text-gray-500 text-sm">故障树项目</span>}
                 value={projects.length}
                 prefix={<ProjectOutlined className="text-blue-500" />}
-                valueStyle={{ color: '#1677ff', fontSize: 28 }}
+                styles={{ content: { color: '#1677ff', fontSize: 28 } }}
               />
             </div>
           </Col>
-          <Col span={8}>
+          <Col span={6}>
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
                 title={<span className="text-gray-500 text-sm">节点总数</span>}
                 value={totalNodes}
                 prefix={<ApartmentOutlined className="text-green-500" />}
-                valueStyle={{ color: '#52c41a', fontSize: 28 }}
+                styles={{ content: { color: '#52c41a', fontSize: 28 } }}
               />
             </div>
           </Col>
-          <Col span={8}>
+          <Col span={6}>
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
-                title={<span className="text-gray-500 text-sm">最近更新</span>}
-                value={projects.length > 0
-                  ? new Date(projects[0].createdAt).toLocaleDateString('zh-CN')
-                  : '—'
-                }
+                title={<span className="text-gray-500 text-sm">知识图谱</span>}
+                value={kgList.length}
+                prefix={<ApiOutlined className="text-purple-500" />}
+                styles={{ content: { color: '#722ed1', fontSize: 28 } }}
+              />
+            </div>
+          </Col>
+          <Col span={6}>
+            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
+              <Statistic
+                title={<span className="text-gray-500 text-sm">实体总数</span>}
+                value={totalEntities}
                 prefix={<FundOutlined className="text-orange-400" />}
-                valueStyle={{ color: '#fa8c16', fontSize: 20 }}
+                styles={{ content: { color: '#fa8c16', fontSize: 28 } }}
               />
             </div>
           </Col>
@@ -181,10 +297,10 @@ export default function Dashboard() {
 
         {/* Project List Header */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-800">我的项目</h2>
+          <h2 className="text-lg font-semibold text-gray-800">我的工作区</h2>
           <Input
             prefix={<SearchOutlined className="text-gray-400" />}
-            placeholder="搜索项目名称..."
+            placeholder="搜索名称..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             style={{ width: 220 }}
@@ -192,46 +308,44 @@ export default function Dashboard() {
           />
         </div>
 
-        <Divider style={{ margin: '0 0 16px' }} />
+        <Divider style={{ margin: '0 0 0' }} />
 
-        {/* Grid */}
-        {filtered.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map(p => (
-              <ProjectCard key={p.id} project={p} onDelete={handleDeleteProject} />
-            ))}
-            {/* New Project Quick Card */}
-            <div
-              onClick={() => setShowModal(true)}
-              className="border-2 border-dashed border-gray-200 rounded-xl flex flex-col items-center justify-center p-8 cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-all text-gray-400 hover:text-blue-500"
-            >
-              <PlusOutlined style={{ fontSize: 28 }} />
-              <p className="mt-2 text-sm font-medium">新建项目</p>
-            </div>
-          </div>
-        ) : (
-          <div className="bg-white rounded-xl border border-gray-100 py-16">
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
-                <div className="text-center">
-                  <p className="text-gray-500 mb-3">
-                    {search ? `未找到与 "${search}" 匹配的项目` : '还没有项目，点击右上角新建一个'}
-                  </p>
-                  {!search && (
-                    <Button
-                      type="primary"
-                      icon={<PlusOutlined />}
-                      onClick={() => setShowModal(true)}
-                    >
-                      新建第一个项目
-                    </Button>
-                  )}
-                </div>
-              }
-            />
-          </div>
-        )}
+        {/* Tabs */}
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            {
+              key: 'ft',
+              label: <span><ApartmentOutlined className="mr-1" />故障树（{projects.length}）</span>,
+              children: (
+                <ProjectGrid
+                  items={ftFiltered}
+                  search={search}
+                  onDelete={handleDeleteProject}
+                  onNew={() => setShowModal(true)}
+                  emptyText="还没有故障树项目"
+                  newLabel="新建故障树"
+                />
+              ),
+            },
+            {
+              key: 'kg',
+              label: <span><ApiOutlined className="mr-1" />知识图谱（{kgList.length}）</span>,
+              children: (
+                <ProjectGrid
+                  items={kgFiltered}
+                  search={search}
+                  onDelete={handleDeleteKg}
+                  onNew={() => setShowKgModal(true)}
+                  emptyText="还没有知识图谱"
+                  newLabel="新建知识图谱"
+                  newColor="purple"
+                />
+              ),
+            },
+          ]}
+        />
       </main>
 
       {/* Footer */}
@@ -243,6 +357,66 @@ export default function Dashboard() {
         open={showModal}
         onConfirm={handleCreateProject}
         onCancel={() => setShowModal(false)}
+      />
+      <NewKnowledgeGraphModal
+        open={showKgModal}
+        onConfirm={handleCreateKg}
+        onCancel={() => setShowKgModal(false)}
+      />
+      <DocumentUploadModal
+        open={!!docUploadTarget}
+        target={docUploadTarget}
+        onComplete={handleDocUploadComplete}
+        onCancel={() => setDocUploadTarget(null)}
+      />
+    </div>
+  )
+}
+
+// ─── 通用项目网格组件 ─────────────────────────────────────────────
+function ProjectGrid({ items, search, onDelete, onNew, emptyText, newLabel, newColor = 'blue' }) {
+  const hoverCls = newColor === 'purple'
+    ? 'hover:border-purple-400 hover:bg-purple-50 hover:text-purple-500'
+    : 'hover:border-blue-400 hover:bg-blue-50 hover:text-blue-500'
+
+  if (items.length > 0) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
+        {items.map(p => (
+          <ProjectCard key={p.id} project={p} onDelete={onDelete} />
+        ))}
+        <div
+          onClick={onNew}
+          className={`border-2 border-dashed border-gray-200 rounded-xl flex flex-col items-center justify-center p-8 cursor-pointer transition-all text-gray-400 ${hoverCls}`}
+        >
+          <PlusOutlined style={{ fontSize: 28 }} />
+          <p className="mt-2 text-sm font-medium">{newLabel}</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 py-16 mt-4">
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description={
+          <div className="text-center">
+            <p className="text-gray-500 mb-3">
+              {search ? `未找到与 "${search}" 匹配的内容` : emptyText}
+            </p>
+            {!search && (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={onNew}
+                style={newColor === 'purple' ? { background: '#722ed1', borderColor: '#722ed1' } : {}}
+              >
+                {newLabel}
+              </Button>
+            )}
+          </div>
+        }
       />
     </div>
   )
