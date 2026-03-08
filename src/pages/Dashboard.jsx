@@ -1,7 +1,7 @@
 // 仪表盘页面，显示项目统计信息、项目列表和新建项目功能
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Input, Empty, Statistic, Row, Col, Divider, Dropdown, Tabs, message } from 'antd'
+import { Button, Input, Empty, Statistic, Row, Col, Divider, Dropdown, Tabs, message, Spin } from 'antd'
 import {
   PlusOutlined, SearchOutlined, ApartmentOutlined,
   ProjectOutlined, FundOutlined, ApiOutlined,
@@ -12,23 +12,25 @@ import NewProjectModal from '../components/dashboard/NewProjectModal'
 import NewKnowledgeGraphModal from '../components/dashboard/NewKnowledgeGraphModal'
 import DocumentUploadModal from '../components/dashboard/DocumentUploadModal'
 import UserAvatar from '../components/common/UserAvatar'
-
-const STORAGE_KEY = 'optitree_projects'
-const KG_STORAGE_KEY = 'optitree_kg_list'
+import {
+  getDashboardSummary, listProjects, createProject, deleteProject,
+} from '../services/projectService'
+import { importFaultTree } from '../services/faultTreeService'
+import { importKnowledgeGraph } from '../services/knowledgeGraphService'
 
 // ─── Template preset graphs ───────────────────────────────────────
 const TEMPLATES = {
   power: {
     nodes: [
-      { id: 'root',   type: 'topEvent',   name: '电源系统失效' },
-      { id: 'gate1',  type: 'gate',       name: 'OR' },
-      { id: 'mid1',   type: 'midEvent',   name: '主供电故障' },
-      { id: 'mid2',   type: 'midEvent',   name: '备用电源故障' },
-      { id: 'gate2',  type: 'gate',       name: 'AND' },
-      { id: 'b1',     type: 'basicEvent', name: '电池耗尽',   probability: 0.02 },
-      { id: 'b2',     type: 'basicEvent', name: '线路短路',   probability: 0.005 },
-      { id: 'b3',     type: 'basicEvent', name: '变压器故障', probability: 0.01 },
-      { id: 'b4',     type: 'basicEvent', name: '充电器失效', probability: 0.008 },
+      { id: 'root',   type: 'topEvent',   name: '电源系统失效',   x: 0, y: 0, width: 140, height: 60 },
+      { id: 'gate1',  type: 'gate',       name: 'OR',            gateType: 'OR', x: 0, y: 0, width: 80, height: 64 },
+      { id: 'mid1',   type: 'midEvent',   name: '主供电故障',     x: 0, y: 0, width: 120, height: 56 },
+      { id: 'mid2',   type: 'midEvent',   name: '备用电源故障',   x: 0, y: 0, width: 120, height: 56 },
+      { id: 'gate2',  type: 'gate',       name: 'AND',           gateType: 'AND', x: 0, y: 0, width: 80, height: 64 },
+      { id: 'b1',     type: 'basicEvent', name: '电池耗尽',       probability: 0.02, x: 0, y: 0, width: 110, height: 56 },
+      { id: 'b2',     type: 'basicEvent', name: '线路短路',       probability: 0.005, x: 0, y: 0, width: 110, height: 56 },
+      { id: 'b3',     type: 'basicEvent', name: '变压器故障',     probability: 0.01, x: 0, y: 0, width: 110, height: 56 },
+      { id: 'b4',     type: 'basicEvent', name: '充电器失效',     probability: 0.008, x: 0, y: 0, width: 110, height: 56 },
     ],
     edges: [
       { id: 'e1', from: 'root',  to: 'gate1' },
@@ -44,15 +46,15 @@ const TEMPLATES = {
   },
   software: {
     nodes: [
-      { id: 'root',  type: 'topEvent',   name: '软件系统崩溃' },
-      { id: 'gate1', type: 'gate',       name: 'OR' },
-      { id: 'mid1',  type: 'midEvent',   name: '内存溢出' },
-      { id: 'mid2',  type: 'midEvent',   name: '进程死锁' },
-      { id: 'gate2', type: 'gate',       name: 'AND' },
-      { id: 'b1',    type: 'basicEvent', name: '内存泄漏',   probability: 0.03 },
-      { id: 'b2',    type: 'basicEvent', name: '大数据量输入', probability: 0.05 },
-      { id: 'b3',    type: 'basicEvent', name: '资源竞争',   probability: 0.02 },
-      { id: 'b4',    type: 'basicEvent', name: '锁未释放',   probability: 0.01 },
+      { id: 'root',  type: 'topEvent',   name: '软件系统崩溃',     x: 0, y: 0, width: 140, height: 60 },
+      { id: 'gate1', type: 'gate',       name: 'OR',              gateType: 'OR', x: 0, y: 0, width: 80, height: 64 },
+      { id: 'mid1',  type: 'midEvent',   name: '内存溢出',         x: 0, y: 0, width: 120, height: 56 },
+      { id: 'mid2',  type: 'midEvent',   name: '进程死锁',         x: 0, y: 0, width: 120, height: 56 },
+      { id: 'gate2', type: 'gate',       name: 'AND',             gateType: 'AND', x: 0, y: 0, width: 80, height: 64 },
+      { id: 'b1',    type: 'basicEvent', name: '内存泄漏',         probability: 0.03, x: 0, y: 0, width: 110, height: 56 },
+      { id: 'b2',    type: 'basicEvent', name: '大数据量输入',     probability: 0.05, x: 0, y: 0, width: 110, height: 56 },
+      { id: 'b3',    type: 'basicEvent', name: '资源竞争',         probability: 0.02, x: 0, y: 0, width: 110, height: 56 },
+      { id: 'b4',    type: 'basicEvent', name: '锁未释放',         probability: 0.01, x: 0, y: 0, width: 110, height: 56 },
     ],
     edges: [
       { id: 'e1', from: 'root',  to: 'gate1' },
@@ -68,123 +70,125 @@ const TEMPLATES = {
   },
 }
 
-function loadProjects() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
-  } catch {
-    return []
-  }
-}
-
-function saveProjects(projects) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
-}
-
-function loadKgList() {
-  try {
-    return JSON.parse(localStorage.getItem(KG_STORAGE_KEY) || '[]')
-  } catch {
-    return []
-  }
-}
-
-function saveKgList(list) {
-  localStorage.setItem(KG_STORAGE_KEY, JSON.stringify(list))
-}
-
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [projects, setProjects] = useState(loadProjects)
-  const [kgList, setKgList] = useState(loadKgList)
+  const [projects, setProjects] = useState([])
+  const [kgList, setKgList] = useState([])
+  const [summary, setSummary] = useState({})
+  const [listLoading, setListLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState('ft')
   const [showModal, setShowModal] = useState(false)
   const [showKgModal, setShowKgModal] = useState(false)
   const [docUploadTarget, setDocUploadTarget] = useState(null) // 'faultTree' | 'knowledge' | null
 
-  useEffect(() => { saveProjects(projects) }, [projects])
-  useEffect(() => { saveKgList(kgList) }, [kgList])
+  // ─── 从 API 加载数据 ──────────────────────────────────────────
+  const loadData = useCallback(async () => {
+    setListLoading(true)
+    try {
+      const [summaryData, ftData, kgData] = await Promise.all([
+        getDashboardSummary(),
+        listProjects({ type: 'ft', pageSize: 100 }),
+        listProjects({ type: 'kg', pageSize: 100 }),
+      ])
+      setSummary(summaryData)
+      setProjects(ftData.list || [])
+      setKgList(kgData.list || [])
+    } catch (err) {
+      message.error(err?.message || '加载失败，请刷新重试')
+    } finally {
+      setListLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadData() }, [loadData])
 
   // ─── 创建故障树项目 ───────────────────────────────────────────
-  function handleCreateProject({ name, template }) {
-    const id = `proj_${Date.now()}`
-    const tpl = TEMPLATES[template]
-    const newProject = {
-      id,
-      name,
-      type: 'ft',
-      createdAt: new Date().toISOString(),
-      nodeCount: tpl ? tpl.nodes.length : 0,
-      edgeCount: tpl ? tpl.edges.length : 0,
-      tags: tpl ? tpl.tags : [],
+  async function handleCreateProject({ name, template, description, tags }) {
+    try {
+      const tpl = TEMPLATES[template]
+      const data = await createProject({
+        name,
+        type: 'ft',
+        description: description || '',
+        // 用户手动填入的标签优先；无标签时使用模板预设标签
+        tags: tags?.length ? tags : (tpl ? tpl.tags : []),
+      })
+      const { project } = data
+      // 若有模板则导入图数据
+      if (tpl) {
+        await importFaultTree({ projectId: project.id, nodes: tpl.nodes, edges: tpl.edges })
+      }
+      setShowModal(false)
+      navigate(`/editor?id=${project.id}`)
+    } catch (err) {
+      message.error(err?.message || '创建失败')
     }
-    if (tpl) {
-      const nodes = tpl.nodes.map(n => ({ width: 120, height: 60, x: 0, y: 0, ...n }))
-      localStorage.setItem(`optitree_data_${id}`, JSON.stringify({ nodes, edges: tpl.edges }))
-    }
-    setProjects(prev => [newProject, ...prev])
-    setShowModal(false)
   }
 
   // ─── 创建空白知识图谱 ─────────────────────────────────────────
-  function handleCreateKg(kg) {
-    setKgList(prev => [kg, ...prev])
-    setShowKgModal(false)
-    navigate(`/knowledge?id=${kg.id}`)
+  async function handleCreateKg({ name, description, tags }) {
+    try {
+      const data = await createProject({ name, type: 'kg', description: description || '', tags: tags || [] })
+      const { project } = data
+      setShowKgModal(false)
+      navigate(`/knowledge?id=${project.id}`)
+    } catch (err) {
+      message.error(err?.message || '创建失败')
+    }
   }
 
-  // ─── 文档上传完成后跳转 ───────────────────────────────────────
-  function handleDocUploadComplete(result) {
+  // ─── 文档上传完成后（AI 生成，仍为 mock）────────────────────
+  async function handleDocUploadComplete(result) {
     setDocUploadTarget(null)
-    if (result?.projectId) {
-      // AI 生成图谱 → 写入 projects
-      const id = result.projectId
-      const newProject = {
-        id,
-        name: '（AI 生成）故障树',
-        type: 'ft',
-        createdAt: new Date().toISOString(),
-        nodeCount: result.nodes?.length ?? 0,
-        edgeCount: result.edges?.length ?? 0,
-        tags: ['AI生成'],
+    try {
+      if (result?.projectId || (result?.nodes && result?.edges)) {
+        // AI 生成故障树 → 在后端创建项目并导入数据
+        const data = await createProject({ name: '（AI 生成）故障树', type: 'ft', tags: ['AI生成'] })
+        const { project } = data
+        await importFaultTree({
+          projectId: project.id,
+          nodes: (result.nodes ?? []).map(n => ({ ...n, width: n.width ?? 120, height: n.height ?? 60 })),
+          edges: result.edges ?? [],
+        })
+        await loadData()
+        navigate(`/editor?id=${project.id}`)
+      } else if (result?.kgId || result?.nodes) {
+        // AI 生成知识图谱 → 在后端创建项目并导入数据
+        const data = await createProject({ name: '（AI 生成）知识图谱', type: 'kg', tags: ['AI生成'] })
+        const { project } = data
+        await importKnowledgeGraph({
+          projectId: project.id,
+          rfNodes: result.nodes ?? [],
+          rfEdges: result.edges ?? [],
+        })
+        await loadData()
+        navigate(`/knowledge?id=${project.id}`)
       }
-      localStorage.setItem(`optitree_data_${id}`, JSON.stringify({
-        nodes: (result.nodes ?? []).map(n => ({ ...n, width: n.width ?? 120, height: n.height ?? 60 })),
-        edges: result.edges ?? [],
-      }))
-      setProjects(prev => [newProject, ...prev])
-      navigate(`/editor?id=${id}`)
-    } else if (result?.kgId) {
-      const kg = {
-        id: result.kgId,
-        name: '（AI 生成）知识图谱',
-        type: 'kg',
-        createdAt: new Date().toISOString(),
-        entityCount: result.entityCount ?? 0,
-        relationCount: result.relationCount ?? 0,
-        tags: ['AI生成'],
-        description: '',
-      }
-      localStorage.setItem(`optitree_kg_${result.kgId}`, JSON.stringify({
-        rfNodes: result.nodes ?? [],
-        rfEdges: result.edges ?? [],
-      }))
-      setKgList(prev => [kg, ...prev])
-      navigate(`/knowledge?id=${result.kgId}`)
+    } catch (err) {
+      message.error(err?.message || '导入失败')
     }
   }
 
   // ─── 删除 ──────────────────────────────────────────────────────
-  function handleDeleteProject(id) {
-    setProjects(prev => prev.filter(p => p.id !== id))
-    localStorage.removeItem(`optitree_data_${id}`)
-    localStorage.removeItem(`optitree_versions_${id}`)
+  async function handleDeleteProject(id) {
+    try {
+      await deleteProject(id)
+      setProjects(prev => prev.filter(p => p.id !== id))
+      setSummary(prev => ({ ...prev, faultTreeProjectCount: (prev.faultTreeProjectCount || 1) - 1 }))
+    } catch (err) {
+      message.error(err?.message || '删除失败')
+    }
   }
 
-  function handleDeleteKg(id) {
-    setKgList(prev => prev.filter(k => k.id !== id))
-    localStorage.removeItem(`optitree_kg_${id}`)
-    localStorage.removeItem(`optitree_versions_${id}`)
+  async function handleDeleteKg(id) {
+    try {
+      await deleteProject(id)
+      setKgList(prev => prev.filter(k => k.id !== id))
+      setSummary(prev => ({ ...prev, knowledgeProjectCount: (prev.knowledgeProjectCount || 1) - 1 }))
+    } catch (err) {
+      message.error(err?.message || '删除失败')
+    }
   }
 
   // ─── Dropdown 菜单项 ──────────────────────────────────────────
@@ -214,7 +218,6 @@ export default function Dashboard() {
       label: 'AI识别文档 → 知识图谱（Beta）',
       onClick: () => { setDocUploadTarget('knowledge'); setActiveTab('kg') },
     },
-    
   ]
 
   // ─── 当前 tab 的过滤数据 ──────────────────────────────────────
@@ -224,9 +227,6 @@ export default function Dashboard() {
   const kgFiltered = kgList.filter(k =>
     k.name.toLowerCase().includes(search.toLowerCase())
   )
-
-  const totalNodes = projects.reduce((s, p) => s + (p.nodeCount || 0), 0)
-  const totalEntities = kgList.reduce((s, k) => s + (k.entityCount || 0), 0)
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -253,12 +253,13 @@ export default function Dashboard() {
 
       <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-8">
         {/* Stats */}
+        <Spin spinning={listLoading}>
         <Row gutter={16} className="mb-8">
           <Col span={6}>
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
                 title={<span className="text-gray-500 text-sm">故障树项目</span>}
-                value={projects.length}
+                value={summary.faultTreeProjectCount ?? projects.length}
                 prefix={<ProjectOutlined className="text-blue-500" />}
                 styles={{ content: { color: '#1677ff', fontSize: 28 } }}
               />
@@ -268,7 +269,7 @@ export default function Dashboard() {
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
                 title={<span className="text-gray-500 text-sm">节点总数</span>}
-                value={totalNodes}
+                value={summary.faultTreeNodeCount ?? 0}
                 prefix={<ApartmentOutlined className="text-green-500" />}
                 styles={{ content: { color: '#52c41a', fontSize: 28 } }}
               />
@@ -278,7 +279,7 @@ export default function Dashboard() {
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
                 title={<span className="text-gray-500 text-sm">知识图谱</span>}
-                value={kgList.length}
+                value={summary.knowledgeProjectCount ?? kgList.length}
                 prefix={<ApiOutlined className="text-purple-500" />}
                 styles={{ content: { color: '#722ed1', fontSize: 28 } }}
               />
@@ -288,13 +289,14 @@ export default function Dashboard() {
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
                 title={<span className="text-gray-500 text-sm">实体总数</span>}
-                value={totalEntities}
+                value={summary.knowledgeEntityCount ?? 0}
                 prefix={<FundOutlined className="text-orange-400" />}
                 styles={{ content: { color: '#fa8c16', fontSize: 28 } }}
               />
             </div>
           </Col>
         </Row>
+        </Spin>
 
         {/* Project List Header */}
         <div className="flex items-center justify-between mb-4">

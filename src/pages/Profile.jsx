@@ -3,18 +3,19 @@
  * 路由：/profile
  * 布局：渐变背景 + 居中白色卡片（与 Login/Register 风格一致）
  */
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Card, Form, Input, Button, Avatar, Tag, Divider,
-  Typography, message, Tooltip, Alert,
+  Typography, message, Tooltip, Alert, Table, Badge,
 } from 'antd'
 import {
   ArrowLeftOutlined, UserOutlined, MailOutlined,
   LockOutlined, SafetyCertificateOutlined, EditOutlined,
-  GithubOutlined, WechatOutlined,
+  GithubOutlined, WechatOutlined, CameraOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../store/useAuthStore'
+import { get } from '../services/apiClient'
 
 const { Text, Title } = Typography
 
@@ -33,11 +34,40 @@ function initials(name = '') {
 
 export default function Profile() {
   const navigate = useNavigate()
-  const { user, updateProfile, changePassword } = useAuth()
+  const { user, updateProfile, changePassword, uploadAvatar } = useAuth()
   const [profileForm] = Form.useForm()
   const [pwdForm] = Form.useForm()
   const [profileLoading, setProfileLoading] = useState(false)
   const [pwdLoading, setPwdLoading] = useState(false)
+  const [avatarLoading, setAvatarLoading] = useState(false)
+  const fileInputRef = useRef(null)
+  const [loginLogs, setLoginLogs] = useState([])
+  const [logsLoading, setLogsLoading] = useState(false)
+
+  useEffect(() => {
+    setLogsLoading(true)
+    get('/api/v1/users/me/login-logs', { page: 1, pageSize: 10 })
+      .then(data => setLoginLogs(data.list || []))
+      .catch(() => {})
+      .finally(() => setLogsLoading(false))
+  }, [])
+
+  async function handleAvatarChange(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) { message.error('请选择图片文件'); return }
+    if (file.size > 5 * 1024 * 1024) { message.error('图片不超过 5MB'); return }
+    setAvatarLoading(true)
+    try {
+      await uploadAvatar(file)
+      message.success('头像已更新')
+    } catch (err) {
+      message.error(err?.message || '上传失败')
+    } finally {
+      setAvatarLoading(false)
+      e.target.value = ''
+    }
+  }
 
   // ── 提交基本信息 ─────────────────────────────────────────────
   async function handleProfileSave() {
@@ -93,8 +123,11 @@ export default function Profile() {
         {/* ── 基本信息卡 ── */}
         <Card className="shadow-sm rounded-2xl">
           <div className="flex items-center gap-4 mb-6">
-            <Tooltip title="TODO: 点击上传头像">
-              <div className="relative cursor-pointer group">
+            <Tooltip title="点击更换头像">
+              <div
+                className="relative cursor-pointer group"
+                onClick={() => !avatarLoading && fileInputRef.current?.click()}
+              >
                 {user?.avatar ? (
                   <Avatar size={72} src={user.avatar} />
                 ) : (
@@ -106,10 +139,17 @@ export default function Profile() {
                   </Avatar>
                 )}
                 <div className="absolute inset-0 bg-black/30 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <EditOutlined className="text-white text-lg" />
+                  <CameraOutlined className="text-white text-lg" />
                 </div>
               </div>
             </Tooltip>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleAvatarChange}
+            />
             <div>
               <Title level={5} className="mb-0">{user?.displayName}</Title>
               <Text className="text-gray-500 text-sm">{user?.email}</Text>
@@ -265,6 +305,46 @@ export default function Profile() {
             <div className="flex justify-between items-center py-2 border-b border-gray-50">
               <Text className="text-gray-500 text-sm">最近登录</Text>
               <Text className="text-gray-700 text-sm">{loginAt}</Text>
+            </div>
+
+            <Divider style={{ margin: '8px 0' }} />
+
+            {/* 登录历史 */}
+            <div>
+              <Text className="text-gray-500 text-sm block mb-2">登录历史</Text>
+              <Table
+                size="small"
+                loading={logsLoading}
+                dataSource={loginLogs}
+                rowKey="id"
+                pagination={false}
+                columns={[
+                  {
+                    title: '时间',
+                    dataIndex: 'createdAt',
+                    width: 140,
+                    render: v => new Date(v).toLocaleString('zh-CN'),
+                  },
+                  {
+                    title: 'IP',
+                    dataIndex: 'ipAddress',
+                    width: 120,
+                  },
+                  {
+                    title: '区域',
+                    dataIndex: 'region',
+                    ellipsis: true,
+                  },
+                  {
+                    title: '状态',
+                    dataIndex: 'success',
+                    width: 70,
+                    render: v => v
+                      ? <Badge status="success" text="成功" />
+                      : <Badge status="error" text="失败" />,
+                  },
+                ]}
+              />
             </div>
 
             <Divider style={{ margin: '8px 0' }} />

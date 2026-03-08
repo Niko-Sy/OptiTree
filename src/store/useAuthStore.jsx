@@ -1,19 +1,18 @@
 /**
- * useAuthStore — 用户认证状态管理
- *
- * 当前实现使用 localStorage 模拟持久化会话，所有网络请求预留为
- * TODO 注释，便于后续接入真实后端 API。
+ * useAuthStore — 用户认证状态管理（接入真实后端）
+ * Base URL: VITE_API_BASE_URL/api/v1
  */
 
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { post, get, tokenStore, ApiError } from '../services/apiClient'
 
 // ─── Context ──────────────────────────────────────────────────────
 const AuthContext = createContext(null)
 
-// ─── Storage helpers ──────────────────────────────────────────────
+// ─── 用户信息缓存（localStorage，仅存 user 对象，不含 token）──────
 const SESSION_KEY = 'optitree_session'
 
-function loadSession() {
+function loadCachedUser() {
   try {
     return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null')
   } catch {
@@ -21,7 +20,7 @@ function loadSession() {
   }
 }
 
-function persistSession(user) {
+function persistUser(user) {
   if (user) {
     localStorage.setItem(SESSION_KEY, JSON.stringify(user))
   } else {
@@ -31,41 +30,43 @@ function persistSession(user) {
 
 // ─── Provider ─────────────────────────────────────────────────────
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(loadSession)
+  // 初始从缓存恢复，等 fetchMe 完成后会用最新数据覆盖
+  const [user, setUser] = useState(loadCachedUser)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  /** 登录
-   * @param {{ username: string, password: string, remember: boolean }} credentials
-   * TODO: 替换为后端 POST /api/auth/login
-   */
+  // 应用启动时：若有 accessToken 则用 /users/me 验证并刷新用户信息
+  useEffect(() => {
+    if (!tokenStore.getAccess()) {
+      return
+    }
+    get('/api/v1/users/me')
+      .then(data => {
+        setUser(data.user)
+        persistUser(data.user)
+      })
+      .catch(() => {
+        // token 已失效，清除本地缓存
+        tokenStore.clearAll()
+        persistUser(null)
+        setUser(null)
+      })
+  }, []) // eslint-disable-line
+
+  /** 登录 — POST /api/v1/auth/login */
   const login = useCallback(async ({ username, password, remember }) => {
     setLoading(true)
     setError(null)
     try {
-      // ── TODO: await fetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
-      // 模拟网络延迟
-      await new Promise(r => setTimeout(r, 600))
-
-      // 简单前端验证占位（后端接入后删除）
-      if (!username || !password) throw new Error('用户名和密码不能为空')
-
-      const sessionUser = {
-        id: `user_${Date.now()}`,
-        username,
-        displayName: username,
-        email: `${username}@example.com`,
-        avatar: null,         // TODO: 后端返回头像 URL
-        role: 'user',
-        token: `mock_token_${Date.now()}`,  // TODO: JWT from backend
-        loginAt: new Date().toISOString(),
-      }
-
-      if (remember) persistSession(sessionUser)
-      setUser(sessionUser)
-      return sessionUser
+      const data = await post('/api/v1/auth/login', { username, password, remember })
+      tokenStore.setAccess(data.accessToken)
+      tokenStore.setRefresh(data.refreshToken)
+      const u = data.user
+      persistUser(u)
+      setUser(u)
+      return u
     } catch (err) {
-      const msg = err.message || '登录失败，请稍后重试'
+      const msg = err instanceof ApiError ? err.message : (err.message || '登录失败，请稍后重试')
       setError(msg)
       throw new Error(msg)
     } finally {
@@ -73,82 +74,84 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  /** 注册
-   * @param {{ username: string, email: string, password: string }} data
-   * TODO: 替换为后端 POST /api/auth/register
-   */
-  const register = useCallback(async ({ username, email, password }) => {
+  /** 注册 — POST /api/v1/auth/register，注册后自动登录获取 token */
+  const register = useCallback(async ({ username, email, password, agree = true }) => {
     setLoading(true)
     setError(null)
     try {
-      // ── TODO: await fetch('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, email, password }) })
-      await new Promise(r => setTimeout(r, 800))
-
-      const sessionUser = {
-        id: `user_${Date.now()}`,
-        username,
-        displayName: username,
-        email,
-        avatar: null,
-        role: 'user',
-        token: `mock_token_${Date.now()}`,
-        loginAt: new Date().toISOString(),
-      }
-
-      persistSession(sessionUser)
-      setUser(sessionUser)
+      // 注册接口只返回 user，无 token；随后自动调 login
+      await post('/api/v1/auth/register', { username, email, password, agree })
+      const sessionUser = await login({ username, password, remember: false })
       return sessionUser
     } catch (err) {
-      const msg = err.message || '注册失败，请稍后重试'
+      const msg = err instanceof ApiError ? err.message : (err.message || '注册失败，请稍后重试')
       setError(msg)
       throw new Error(msg)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [login])
 
-  /** 登出
-   * TODO: 调用后端 POST /api/auth/logout 使 token 失效
-   */
+  /** 登出 — POST /api/v1/auth/logout */
   const logout = useCallback(async () => {
     setLoading(true)
     try {
-      // ── TODO: await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${user?.token}` } })
-      await new Promise(r => setTimeout(r, 300))
+      const refreshToken = tokenStore.getRefresh()
+      await post('/api/v1/auth/logout', { refreshToken }).catch(() => {})
     } finally {
-      persistSession(null)
+      tokenStore.clearAll()
+      persistUser(null)
       setUser(null)
       setLoading(false)
     }
   }, [])
 
-  /** 更新用户信息（如头像、昵称等）
-   * TODO: 替换为后端 PATCH /api/user/profile
-   */
+  /** 获取最新用户信息 — GET /api/v1/users/me */
+  const fetchMe = useCallback(async () => {
+    const data = await get('/api/v1/users/me')
+    setUser(data.user)
+    persistUser(data.user)
+    return data.user
+  }, [])
+
+  /** 更新用户资料 — POST /api/v1/users/me/update */
   const updateProfile = useCallback(async (patch) => {
     setLoading(true)
     try {
-      // ── TODO: await fetch('/api/user/profile', { method: 'PATCH', body: JSON.stringify(patch) })
-      await new Promise(r => setTimeout(r, 400))
-      setUser(prev => {
-        const next = { ...prev, ...patch }
-        persistSession(next)
-        return next
-      })
+      const data = await post('/api/v1/users/me/update', patch)
+      const u = data.user
+      persistUser(u)
+      setUser(u)
+      return u
     } finally {
       setLoading(false)
     }
   }, [])
 
-  /** 修改密码
-   * TODO: 替换为后端 POST /api/auth/change-password
-   */
-  const changePassword = useCallback(async ({ oldPassword, newPassword }) => { // eslint-disable-line
+  /** 上传头像 — POST /api/v1/users/me/avatar */
+  const uploadAvatar = useCallback(async (file) => {
     setLoading(true)
     try {
-      // ── TODO: await fetch('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ oldPassword, newPassword }) })
-      await new Promise(r => setTimeout(r, 600))
-      // 成功后可强制重新登录
+      const form = new FormData()
+      form.append('avatar', file)
+      const data = await post('/api/v1/users/me/avatar', form)
+      // 更新本地 user avatar
+      setUser(prev => {
+        const u = { ...prev, avatar: data.avatarUrl }
+        persistUser(u)
+        return u
+      })
+      return data.avatarUrl
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  /** 修改密码 — POST /api/v1/auth/change-password */
+  const changePassword = useCallback(async ({ oldPassword, newPassword }) => {
+    setLoading(true)
+    try {
+      await post('/api/v1/auth/change-password', { oldPassword, newPassword })
     } finally {
       setLoading(false)
     }
@@ -161,11 +164,13 @@ export function AuthProvider({ children }) {
       user,
       loading,
       error,
-      isAuthenticated: !!user,
+      isAuthenticated: !!(user && tokenStore.getAccess()),
       login,
       register,
       logout,
+      fetchMe,
       updateProfile,
+      uploadAvatar,
       changePassword,
       clearError,
     }}>

@@ -2,13 +2,14 @@
  * Team — 团队协作总览页面
  * 路由：/team
  * 功能：跨项目协作成员汇总、版本动态时间线、快速跳转协作管理
+ * 数据：从后端聚合（listProjects + listMembers + listVersions）
  */
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Button, Card, Tag, Avatar, Tooltip, Empty, Badge,
   Statistic, Row, Col, Input, Tabs, Timeline, Typography,
-  Divider,
+  Divider, Spin,
 } from 'antd'
 import {
   ArrowLeftOutlined, TeamOutlined, ApartmentOutlined,
@@ -18,10 +19,10 @@ import {
 } from '@ant-design/icons'
 import { useAuth } from '../store/useAuthStore'
 import UserAvatar from '../components/common/UserAvatar'
+import { listProjects } from '../services/projectService'
+import { listMembers, listVersions } from '../services/collaborationService'
 
 const { Text, Title } = Typography
-const FT_KEY = 'optitree_projects'
-const KG_KEY = 'optitree_kg_list'
 
 // ─── 头像颜色（与其他页面保持一致）─────────────────────────────
 const AVATAR_COLORS = ['#1677ff', '#52c41a', '#fa8c16', '#722ed1', '#eb2f96', '#13c2c2']
@@ -39,42 +40,65 @@ function initials(name = '') {
 const ROLE_LABEL = { admin: '管理员', editor: '编辑者', viewer: '查看者' }
 const ROLE_COLOR = { admin: 'red', editor: 'blue', viewer: 'default' }
 
-function readJson(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback }
-  catch { return fallback }
-}
-
 export default function Team() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState('projects')
+  const [loading, setLoading] = useState(false)
+  const [enriched, setEnriched] = useState([])   // { ...project, members:[], versions:[] }
 
-  // ── 汇总所有项目 ────────────────────────────────────────────
-  const allProjects = useMemo(() => {
-    const ft = readJson(FT_KEY, []).map(p => ({ ...p, projectType: 'ft' }))
-    const kg = readJson(KG_KEY, []).map(p => ({ ...p, projectType: 'kg' }))
-    return [...ft, ...kg]
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        // 同时拉取故障树项目和知识图谱项目
+        const [ftData, kgData] = await Promise.all([
+          listProjects({ type: 'ft', pageSize: 100 }),
+          listProjects({ type: 'kg', pageSize: 100 }),
+        ])
+        const allProjects = [
+          ...(ftData.list || []).map(p => ({ ...p, projectType: 'ft' })),
+          ...(kgData.list || []).map(p => ({ ...p, projectType: 'kg' })),
+        ]
+        if (cancelled) return
+
+        // 并行为每个项目加载成员和版本（静默处理失败）
+        const enrichedList = await Promise.all(
+          allProjects.map(async p => {
+            const [membersData, versionsData] = await Promise.allSettled([
+              listMembers(p.id),
+              listVersions(p.id),
+            ])
+            return {
+              ...p,
+              members: membersData.status === 'fulfilled' ? (membersData.value?.list || []) : [],
+              versions: versionsData.status === 'fulfilled' ? (versionsData.value?.list || []) : [],
+            }
+          })
+        )
+        if (!cancelled) setEnriched(enrichedList)
+      } catch {
+        // 静默，子列表仍可继续渲染
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
   }, [])
 
-  // ── 为每个项目附加成员和版本信息 ─────────────────────────────
-  const enriched = useMemo(() => allProjects.map(p => {
-    const defaultMembers = [{ id: user?.id ?? 'self', name: user?.displayName ?? user?.username ?? '我', role: 'admin' }]
-    const members = readJson(`optitree_members_${p.id}`, defaultMembers)
-    const versions = readJson(`optitree_versions_${p.id}`, [])
-    return { ...p, members, versions }
-  }), [allProjects, user])
-
   // ── 搜索过滤 ────────────────────────────────────────────────
-  const filtered = enriched.filter(p =>
-    p.name?.toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = useMemo(() =>
+    enriched.filter(p => p.name?.toLowerCase().includes(search.toLowerCase())),
+  [enriched, search])
 
   // ── 统计数据 ────────────────────────────────────────────────
   const totalMembers = useMemo(() => {
-    const names = new Set()
-    enriched.forEach(p => p.members.forEach(m => names.add(m.name)))
-    return names.size
+    const ids = new Set()
+    enriched.forEach(p => p.members.forEach(m => ids.add(m.id || m.userId)))
+    return ids.size
   }, [enriched])
 
   const totalVersions = useMemo(() =>
@@ -114,12 +138,13 @@ export default function Team() {
       <main className="flex-1 max-w-5xl mx-auto w-full px-6 py-8">
 
         {/* 统计卡片 */}
+        <Spin spinning={loading}>
         <Row gutter={16} className="mb-8">
           <Col span={8}>
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
                 title={<span className="text-gray-500 text-sm">协作项目</span>}
-                value={allProjects.length}
+                value={enriched.length}
                 prefix={<ProjectOutlined className="text-blue-500" />}
                 styles={{ content: { color: '#1677ff', fontSize: 28 } }}
               />
@@ -146,6 +171,7 @@ export default function Team() {
             </div>
           </Col>
         </Row>
+        </Spin>
 
         {/* 列表区域 */}
         <div className="flex items-center justify-between mb-4">
@@ -172,7 +198,8 @@ export default function Team() {
               children: (
                 <ProjectList
                   items={filtered}
-                  allCount={allProjects.length}
+                  totalCount={enriched.length}
+                  loading={loading}
                   search={search}
                   onNavigate={navigate}
                 />
@@ -202,8 +229,12 @@ export default function Team() {
 }
 
 // ─── 项目列表面板 ────────────────────────────────────────────────
-function ProjectList({ items, allCount, search, onNavigate }) {
-  if (allCount === 0) {
+function ProjectList({ items, totalCount, loading, search, onNavigate }) {
+  if (loading) {
+    return <div className="py-16 text-center"><Spin /></div>
+  }
+
+  if (totalCount === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-100 py-16 mt-4">
         <Empty
@@ -248,7 +279,7 @@ function ProjectRow({ project, onNavigate }) {
     ? new Date(project.createdAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' })
     : '—'
 
-  const latestVer = project.versions[0]
+  const latestVer = project.versions?.[0]
 
   return (
     <Card
@@ -278,7 +309,7 @@ function ProjectRow({ project, onNavigate }) {
               <ClockCircleOutlined /> {date}
             </span>
             <span className="text-xs text-gray-400 flex items-center gap-1">
-              <HistoryOutlined /> {project.versions.length} 个版本
+              <HistoryOutlined /> {(project.versions || []).length} 个版本
               {latestVer && (
                 <span className="text-gray-300 ml-1">
                   · 最近 {new Date(latestVer.createdAt).toLocaleDateString('zh-CN')}
@@ -291,19 +322,22 @@ function ProjectRow({ project, onNavigate }) {
         {/* 成员头像组 */}
         <div className="flex items-center gap-2 shrink-0">
           <Avatar.Group maxCount={4} size={28}>
-            {project.members.map(m => (
-              <Tooltip key={m.id} title={`${m.name}（${ROLE_LABEL[m.role] ?? m.role}）`}>
-                <Avatar
-                  size={28}
-                  style={{ background: avatarColor(m.name), fontSize: 11, fontWeight: 600 }}
-                >
-                  {initials(m.name)}
-                </Avatar>
-              </Tooltip>
-            ))}
+            {(project.members || []).map(m => {
+              const displayName = m.name || m.displayName || m.username || m.email || '?'
+              return (
+                <Tooltip key={m.id || m.userId} title={`${displayName}（${ROLE_LABEL[m.role] ?? m.role}）`}>
+                  <Avatar
+                    size={28}
+                    style={{ background: avatarColor(displayName), fontSize: 11, fontWeight: 600 }}
+                  >
+                    {initials(displayName)}
+                  </Avatar>
+                </Tooltip>
+              )
+            })}
           </Avatar.Group>
-          <Tag color={ROLE_COLOR[project.members[0]?.role] ?? 'default'} className="text-xs">
-            {project.members.length} 人
+          <Tag color={ROLE_COLOR[project.members?.[0]?.role] ?? 'default'} className="text-xs">
+            {(project.members || []).length} 人
           </Tag>
         </div>
 

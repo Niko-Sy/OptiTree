@@ -2,10 +2,11 @@
  * KnowledgeGraphEditor — 知识图谱编辑页面
  * 结构与 FaultTreeEditor.jsx 完全对应：
  *   KnowledgeStoreProvider > KnowledgeEditorInner
- * 数据通过 localStorage key: optitree_kg_<id> 持久化
+ * 数据通过后端 API 持久化（/api/v1/knowledge-graphs/{id}/graph）
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { message } from 'antd'
 import { KnowledgeStoreProvider, useKnowledgeStore, useKnowledgeActions } from '../store/useKnowledgeStore'
 import KgToolbar from '../components/knowledge/KgToolbar'
 import KgCanvas from '../components/knowledge/KgCanvas'
@@ -13,8 +14,8 @@ import KgEntityPalette from '../components/knowledge/KgEntityPalette'
 import KgPropertiesPanel from '../components/knowledge/KgPropertiesPanel'
 import KgStatusBar from '../components/knowledge/KgStatusBar'
 import AIAssistant from '../components/common/AIAssistant'
-
-const KG_LIST_KEY = 'optitree_kg_list'
+import { getKnowledgeGraph, saveKnowledgeGraph } from '../services/knowledgeGraphService'
+import { getProject } from '../services/projectService'
 
 // ─── 内层组件（含 Store 访问）─────────────────────────────────────
 function KnowledgeEditorInner({ kgId, kgName }) {
@@ -26,43 +27,59 @@ function KnowledgeEditorInner({ kgId, kgName }) {
     nodes: rfNodes,
     edges: rfEdges,
   }), [rfNodes, rfEdges])
+
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [propsCollapsed, setPropsCollapsed] = useState(false)
-  const initDone = useRef(false)
 
   const leftOffset  = paletteCollapsed ? 0 : 208
   const rightOffset = propsCollapsed   ? 0 : 256
 
-  // ── 初始化：从 localStorage 加载图数据 ─────────────────────
+  // 加载状态 & 防重复保存
+  const initDoneRef  = useRef(false)
+  const revisionRef  = useRef(null)
+  const lastSavedRef = useRef(null)   // JSON fingerprint，防止保存未变更的数据
+  const saveTimerRef = useRef(null)
+
+  // ── 初始化：从后端加载图数据 ───────────────────────────────
   useEffect(() => {
-    if (!kgId || initDone.current) return
-    initDone.current = true
-    try {
-      const raw = localStorage.getItem(`optitree_kg_${kgId}`)
-      if (raw) {
-        const { rfNodes: n, rfEdges: e } = JSON.parse(raw)
+    if (!kgId || initDoneRef.current) return
+    getKnowledgeGraph(kgId)
+      .then(({ rfNodes: n, rfEdges: e, revision }) => {
+        revisionRef.current = revision ?? null
         setGraph(n ?? [], e ?? [])
-      }
-    } catch {}
+        initDoneRef.current = true
+        lastSavedRef.current = JSON.stringify({ rfNodes: n ?? [], rfEdges: e ?? [] })
+      })
+      .catch(err => {
+        if (err?.code !== 404) {
+          message.error(err?.message || '加载知识图谱失败')
+        }
+        initDoneRef.current = true
+      })
   }, [kgId]) // eslint-disable-line
 
-  // ── 自动保存 ────────────────────────────────────────────────
+  // ── 防抖自动保存（1.5 s）────────────────────────────────────
   useEffect(() => {
-    if (!kgId) return
-    localStorage.setItem(
-      `optitree_kg_${kgId}`,
-      JSON.stringify({ rfNodes, rfEdges })
-    )
-    // 同步更新 KG 列表中的实体数/关系数
-    try {
-      const list = JSON.parse(localStorage.getItem(KG_LIST_KEY) || '[]')
-      const updated = list.map(k =>
-        k.id === kgId
-          ? { ...k, entityCount: rfNodes.length, relationCount: rfEdges.length }
-          : k
-      )
-      localStorage.setItem(KG_LIST_KEY, JSON.stringify(updated))
-    } catch {}
+    if (!kgId || !initDoneRef.current) return
+    const snap = JSON.stringify({ rfNodes, rfEdges })
+    if (snap === lastSavedRef.current) return   // 无变更，跳过
+
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await saveKnowledgeGraph(kgId, {
+          rfNodes,
+          rfEdges,
+          revision: revisionRef.current,
+        })
+        if (res?.revision != null) revisionRef.current = res.revision
+        lastSavedRef.current = snap
+      } catch {
+        // 静默失败，下次变更时重试
+      }
+    }, 1500)
+
+    return () => clearTimeout(saveTimerRef.current)
   }, [rfNodes, rfEdges, kgId])
 
   return (
@@ -84,12 +101,14 @@ function KnowledgeEditorInner({ kgId, kgName }) {
 export default function KnowledgeGraphEditor() {
   const [searchParams] = useSearchParams()
   const kgId = searchParams.get('id')
+  const [kgName, setKgName] = useState('未命名知识图谱')
 
-  let kgName = '未命名知识图谱'
-  try {
-    const list = JSON.parse(localStorage.getItem(KG_LIST_KEY) || '[]')
-    kgName = list.find(k => k.id === kgId)?.name || '未命名知识图谱'
-  } catch {}
+  useEffect(() => {
+    if (!kgId) return
+    getProject(kgId)
+      .then(({ project }) => setKgName(project?.name || '未命名知识图谱'))
+      .catch(() => {})
+  }, [kgId])
 
   return (
     <KnowledgeStoreProvider>

@@ -1,11 +1,11 @@
 /**
  * NewKnowledgeGraphModal — 创建空白知识图谱
  * Props:
- *   open         — 是否显示
- *   onConfirm(kg) — 创建成功回调，kg: { id, name, description, ... }
- *   onCancel     — 取消回调
+ *   open              — 是否显示
+ *   onConfirm(values) — 创建成功回调，values: { name, description, tags }
+ *   onCancel          — 取消回调
  */
-import { Modal, Form, Input } from 'antd'
+import { Modal, Form, Input, Select } from 'antd'
 
 const { TextArea } = Input
 
@@ -16,14 +16,9 @@ export default function NewKnowledgeGraphModal({ open, onConfirm, onCancel }) {
     form.validateFields().then(values => {
       form.resetFields()
       onConfirm?.({
-        id: `kg_${Date.now()}`,
-        name: values.name,
+        name:        values.name,
         description: values.description ?? '',
-        createdAt: new Date().toISOString(),
-        type: 'kg',
-        entityCount: 0,
-        relationCount: 0,
-        tags: [],
+        tags:        values.tags ?? [],
       })
     })
   }
@@ -57,6 +52,7 @@ export default function NewKnowledgeGraphModal({ open, onConfirm, onCancel }) {
             placeholder="例：液压系统故障知识图谱"
             maxLength={50}
             showCount
+            autoFocus
           />
         </Form.Item>
 
@@ -66,6 +62,14 @@ export default function NewKnowledgeGraphModal({ open, onConfirm, onCancel }) {
             rows={3}
             maxLength={200}
             showCount
+          />
+        </Form.Item>
+
+        <Form.Item name="tags" label="标签（可选）">
+          <Select
+            mode="tags"
+            placeholder="输入标签后按回车确认，支持多个"
+            tokenSeparators={[',']}
           />
         </Form.Item>
       </Form>

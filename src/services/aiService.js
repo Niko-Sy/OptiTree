@@ -1,38 +1,47 @@
 /**
- * aiService.js — AI 与后端接口预留层
- * 所有函数当前返回 mock 数据，后端接入时替换实现即可
+ * aiService.js — AI 能力封装层
+ *
+ * 已接入后端：
+ *   - uploadDocuments  → POST /api/v1/documents/upload
+ *   - validateGraph    → POST /api/v1/fault-trees/{id}/validate 或 knowledge-graphs/{id}/validate
+ *
+ * 仍为 mock（后端未实现）：
+ *   - generateFaultTree
+ *   - generateKnowledgeGraph
+ *   - chatWithAI
+ *
+ * 废弃（迁移至 collaborationService）：
+ *   - listVersions  → collaborationService.listVersions
+ *   - saveVersion   → collaborationService.createVersion
  */
-
-// ─── 后端基础配置（TODO: 替换为实际后端地址）─────────────────────
-// const BASE_URL = 'https://your-backend.com/api'
-// const AI_MODEL  = 'qwen-plus'  // 阿里百炼 / 其他开源大模型
+import { post } from './apiClient'
+import { validateFaultTree as apiFtValidate } from './faultTreeService'
+import { validateKnowledgeGraph as apiKgValidate } from './knowledgeGraphService'
+import { listVersions as colListVersions, createVersion as colCreateVersion } from './collaborationService'
 
 /** 模拟网络延迟 */
 const delay = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// ─── 1. 文档上传与解析 ─────────────────────────────────────────────
+// ─── 1. 文档上传与解析（真实接口）────────────────────────────────
 /**
  * 上传文档并解析为知识片段
  * @param {File[]} files - 文件列表（pdf/doc/xlsx/txt）
- * @param {object} options - { quality: 'fast'|'balanced'|'precise', model: string }
- * @returns {Promise<{ docIds: string[], summary: string }>}
- *
- * TODO: 替换为实际后端上传接口
- * POST /api/documents/upload
- * FormData: files[], quality, model
+ * @param {object} options - { quality, model, projectType }
+ * @returns {Promise<{ docIds: string[], summary: string, documents: object[] }>}
+ * POST /api/v1/documents/upload
  */
 export async function uploadDocuments(files, options = {}) {
-  await delay(800)
-  console.log('[aiService] uploadDocuments', files, options)
-  // TODO: const form = new FormData()
-  // TODO: files.forEach(f => form.append('files', f))
-  // TODO: const res = await fetch(`${BASE_URL}/documents/upload`, { method: 'POST', body: form })
-  // TODO: return res.json()
-
-  // Mock 返回
+  const form = new FormData()
+  files.forEach(f => form.append('files', f))
+  if (options.projectId) form.append('projectId', options.projectId)
+  const data = await post('/api/v1/documents/upload', form)
+  const documents = data.documents || []
   return {
-    docIds: files.map((_, i) => `doc_${Date.now()}_${i}`),
-    summary: `已解析 ${files.length} 份文档，提取实体约 120 个，关系约 80 条`,
+    docIds: documents.map(d => d.id),
+    summary: documents.length > 0
+      ? `已上传 ${documents.length} 份文档`
+      : '上传完成',
+    documents,
   }
 }
 
@@ -121,58 +130,58 @@ export async function generateKnowledgeGraph(docIds, config = {}) {
   }
 }
 
-// ─── 4. AI 逻辑校验（故障树 + 知识图谱通用）──────────────────────
+// ─── 4. AI 逻辑校验（转发到对应专项服务）───────────────────────
 /**
  * 校验图结构逻辑合理性，返回问题列表
  * @param {object[]} nodes
  * @param {object[]} edges
  * @param {'faultTree'|'knowledge'} graphType
+ * @param {string} [projectId] - 需要 projectId 才能调真实接口
  * @returns {Promise<{ issues: AiIssue[], suggestions: string[] }>}
- *
- * TODO: 替换为 AI 大模型逻辑推理接口
- * POST /api/validate
- * Body: { nodes, edges, graphType }
- *
- * 当前 fallback 到本地 aiValidator.js
  */
-export async function validateGraph(nodes, edges, graphType = 'faultTree') {
-  await delay(300)
-  console.log('[aiService] validateGraph', { nodeCount: nodes.length, edgeCount: edges.length, graphType })
-  // TODO: const res = await fetch(`${BASE_URL}/validate`, {
-  // TODO:   method: 'POST',
-  // TODO:   headers: { 'Content-Type': 'application/json' },
-  // TODO:   body: JSON.stringify({ nodes, edges, graphType })
-  // TODO: })
-  // TODO: return res.json()
-
-  // Fallback: 引入本地校验（故障树专用）
+export async function validateGraph(nodes, edges, graphType = 'faultTree', projectId) {
+  if (projectId) {
+    if (graphType === 'faultTree') {
+      const data = await apiFtValidate(projectId, { nodes, edges })
+      return {
+        issues: data.issues || [],
+        suggestions: data.issues?.length === 0 ? ['图结构逻辑正确，暂无优化建议'] : [],
+      }
+    } else {
+      const data = await apiKgValidate(projectId, { rfNodes: nodes, rfEdges: edges })
+      return {
+        issues: data.issues || [],
+        suggestions: data.issues?.length === 0 ? ['图谱结构正确，暂无优化建议'] : [],
+      }
+    }
+  }
+  // 无 projectId 时降级到本地校验（故障树）
   if (graphType === 'faultTree') {
     const { validateFaultTree } = await import('../utils/aiValidator.js')
     const issues = validateFaultTree(nodes, edges)
     return { issues, suggestions: issues.length === 0 ? ['图结构逻辑正确，暂无优化建议'] : [] }
   }
-
   return { issues: [], suggestions: ['知识图谱 AI 校验功能即将上线'] }
 }
 
-// ─── 5. 版本管理（预留后端） ────────────────────────────────────────
+// ─── 5. 版本管理（兼容层，已迁移至 collaborationService）────────
 /**
- * 获取项目版本历史
- * @param {string} projectId
- * @returns {Promise<Version[]>}
- *
- * TODO: GET /api/versions?projectId=xxx
+ * @deprecated 请直接使用 collaborationService.listVersions
  */
-export async function listVersions(projectId) {
-  console.log('[aiService] listVersions', projectId)
-  // TODO: return fetch(`${BASE_URL}/versions?projectId=${projectId}`).then(r => r.json())
+export async function listVersions(projectId, params) {
+  const data = await colListVersions(projectId, params)
+  return data.list || []
+}
 
-  // Fallback: 读 localStorage
-  try {
-    return JSON.parse(localStorage.getItem(`optitree_versions_${projectId}`) || '[]')
-  } catch {
-    return []
-  }
+/**
+ * @deprecated 请直接使用 collaborationService.createVersion
+ */
+export async function saveVersion(projectId, snapshot, label = '') {
+  const data = await colCreateVersion(projectId, {
+    label: label || `版本 ${new Date().toLocaleString('zh-CN')}`,
+    snapshot,
+  })
+  return data.version
 }
 
 // ─── 6. AI 对话问答 ─────────────────────────────────────────────────
@@ -245,32 +254,6 @@ export function getQuickQuestions(contextType) {
 }
 
 /**
- * 保存项目快照为新版本
- * @param {string} projectId
- * @param {{ nodes, edges }} snapshot
- * @param {string} label - 版本说明
- * @returns {Promise<Version>}
- *
- * TODO: POST /api/versions
+ * 保存项目快照为新版本（@deprecated 请使用 collaborationService.createVersion）
+ * 此函数已由上方兼容层替换，原实现已移除
  */
-export async function saveVersion(projectId, snapshot, label = '') {
-  console.log('[aiService] saveVersion', projectId, label)
-  // TODO: return fetch(`${BASE_URL}/versions`, { method: 'POST', ... })
-
-  // Fallback: 写 localStorage
-  const version = {
-    id: `v_${Date.now()}`,
-    projectId,
-    label: label || `版本 ${new Date().toLocaleString('zh-CN')}`,
-    createdAt: new Date().toISOString(),
-    snapshot,
-  }
-  try {
-    const key = `optitree_versions_${projectId}`
-    const versions = JSON.parse(localStorage.getItem(key) || '[]')
-    versions.unshift(version)
-    // 最多保留 30 个版本
-    localStorage.setItem(key, JSON.stringify(versions.slice(0, 30)))
-  } catch {}
-  return version
-}

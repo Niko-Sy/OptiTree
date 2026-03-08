@@ -8,7 +8,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   Button, Timeline, Card, Tag, Empty, Modal, Input,
   Select, Avatar, Tooltip, Popconfirm, message, Divider,
-  Badge, Space, Typography,
+  Badge, Space, Typography, Spin,
 } from 'antd'
 import {
   ArrowLeftOutlined, HistoryOutlined, TeamOutlined,
@@ -17,12 +17,16 @@ import {
   ClockCircleOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../store/useAuthStore'
-import { listVersions, saveVersion } from '../services/aiService'
 import UserAvatar from '../components/common/UserAvatar'
+import {
+  listVersions, createVersion, rollbackVersion, deleteVersion,
+  listMembers, inviteMember, updateMemberRole, removeMember,
+} from '../services/collaborationService'
+import { getProject } from '../services/projectService'
+import { exportFaultTree } from '../services/faultTreeService'
+import { exportKnowledgeGraph } from '../services/knowledgeGraphService'
 
-const { Text, Title } = Typography
-const FT_KEY = 'optitree_projects'
-const KG_KEY = 'optitree_kg_list'
+const { Text } = Typography
 
 // ─── 成员角色配置 ──────────────────────────────────────────────────
 const ROLE_CONFIG = {
@@ -52,109 +56,138 @@ export default function Collaboration() {
   const projectType = searchParams.get('type') ?? 'ft'  // ft | kg
   const isKg = projectType === 'kg'
 
-  // ── 读取项目名称 ────────────────────────────────────────────
-  let projectName = '未命名'
-  try {
-    const list = JSON.parse(localStorage.getItem(isKg ? KG_KEY : FT_KEY) || '[]')
-    projectName = list.find(p => p.id === projectId)?.name ?? '未命名'
-  } catch {}
+  // ── 项目基本信息 ────────────────────────────────────────────
+  const [projectName, setProjectName] = useState('未命名')
+
+  useEffect(() => {
+    if (!projectId) return
+    getProject(projectId)
+      .then(({ project }) => setProjectName(project?.name ?? '未命名'))
+      .catch(() => {})
+  }, [projectId])
 
   // ── 版本历史 ────────────────────────────────────────────────
-  const [versions, setVersions] = useState([])
-  const [previewVersion, setPreviewVersion] = useState(null)
+  const [versions, setVersions]       = useState([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [previewVersion, setPreviewVersion]   = useState(null)
 
   const loadVersions = useCallback(async () => {
     if (!projectId) return
-    const v = await listVersions(projectId)
-    setVersions(v)
+    setVersionsLoading(true)
+    try {
+      const data = await listVersions(projectId)
+      setVersions(data.list || [])
+    } catch (err) {
+      message.error(err?.message || '版本列表加载失败')
+    } finally {
+      setVersionsLoading(false)
+    }
   }, [projectId])
 
   useEffect(() => { loadVersions() }, [loadVersions])
 
   async function handleSaveVersion() {
     if (!projectId) return
-    const snap = isKg
-      ? JSON.parse(localStorage.getItem(`optitree_kg_${projectId}`) || '{}')
-      : JSON.parse(localStorage.getItem(`optitree_data_${projectId}`) || '{}')
-
-    await saveVersion(projectId, snap, '')
-    message.success('版本已保存')
-    loadVersions()
-  }
-
-  function handleRollback(version) {
-    // TODO: diff 对比与回滚逻辑，写回对应 localStorage
-    message.info(`已回滚到：${version.label}（TODO: 写入编辑器状态）`)
-  }
-
-  function handleDeleteVersion(versionId) {
     try {
-      const key = `optitree_versions_${projectId}`
-      const list = JSON.parse(localStorage.getItem(key) || '[]')
-      localStorage.setItem(key, JSON.stringify(list.filter(v => v.id !== versionId)))
+      const ver = await createVersion(projectId, { description: '' })
+      message.success(`版本 ${ver.label ?? ver.id} 已保存`)
+      loadVersions()
+    } catch (err) {
+      message.error(err?.message || '版本保存失败')
+    }
+  }
+
+  async function handleRollback(version) {
+    try {
+      await rollbackVersion(projectId, version.id, { saveCurrent: true })
+      message.success(`已回滚到：${version.label}`)
+      loadVersions()
+    } catch (err) {
+      message.error(err?.message || '回滚失败')
+    }
+  }
+
+  async function handleDeleteVersion(versionId) {
+    try {
+      await deleteVersion(projectId, versionId)
       setVersions(prev => prev.filter(v => v.id !== versionId))
       message.success('版本已删除')
-    } catch {}
-  }
-
-  // ── 成员管理（localStorage 模拟）──────────────────────────
-  const membersKey = `optitree_members_${projectId}`
-  const [members, setMembers] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(membersKey) || 'null')
-      if (saved) return saved
-    } catch {}
-    // 默认：当前用户为管理员
-    return [{ id: user?.id ?? 'self', name: user?.displayName ?? '我', role: 'admin' }]
-  })
-  const [showInvite, setShowInvite] = useState(false)
-  const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState('editor')
-
-  useEffect(() => {
-    localStorage.setItem(membersKey, JSON.stringify(members))
-  }, [members, membersKey])
-
-  function handleInvite() {
-    if (!inviteEmail.trim()) { message.error('请输入邮箱'); return }
-    const newMember = {
-      id: `member_${Date.now()}`,
-      name: inviteEmail,
-      role: inviteRole,
+    } catch (err) {
+      message.error(err?.message || '删除失败')
     }
-    setMembers(prev => [...prev, newMember])
-    setInviteEmail('')
-    setShowInvite(false)
-    message.success(`已邀请 ${inviteEmail}（TODO: 实际邮件通知需后端支持）`)
   }
 
-  function handleRemoveMember(id) {
-    if (id === (user?.id ?? 'self')) { message.warning('不能移除自己'); return }
-    setMembers(prev => prev.filter(m => m.id !== id))
-    message.success('已移除成员')
+  // ── 成员管理 ────────────────────────────────────────────────
+  const [members, setMembers]     = useState([])
+  const [membersLoading, setMembersLoading] = useState(false)
+  const [showInvite, setShowInvite]         = useState(false)
+  const [inviteEmail, setInviteEmail]       = useState('')
+  const [inviteRole, setInviteRole]         = useState('editor')
+
+  const loadMembers = useCallback(async () => {
+    if (!projectId) return
+    setMembersLoading(true)
+    try {
+      const data = await listMembers(projectId)
+      setMembers(data.list || [])
+    } catch (err) {
+      message.error(err?.message || '成员列表加载失败')
+    } finally {
+      setMembersLoading(false)
+    }
+  }, [projectId])
+
+  useEffect(() => { loadMembers() }, [loadMembers])
+
+  async function handleInvite() {
+    if (!inviteEmail.trim()) { message.error('请输入邮箱'); return }
+    try {
+      await inviteMember(projectId, { email: inviteEmail, role: inviteRole })
+      setInviteEmail('')
+      setShowInvite(false)
+      message.success(`已发送邀请至 ${inviteEmail}`)
+      loadMembers()
+    } catch (err) {
+      message.error(err?.message || '邀请失败')
+    }
+  }
+
+  async function handleRoleChange(memberId, newRole) {
+    try {
+      await updateMemberRole(projectId, memberId, { role: newRole })
+      setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: newRole } : m))
+    } catch (err) {
+      message.error(err?.message || '角色更新失败')
+    }
+  }
+
+  async function handleRemoveMember(memberId) {
+    if (memberId === user?.id) { message.warning('不能移除自己'); return }
+    try {
+      await removeMember(projectId, memberId)
+      setMembers(prev => prev.filter(m => m.id !== memberId))
+      message.success('已移除成员')
+    } catch (err) {
+      message.error(err?.message || '移除失败')
+    }
   }
 
   // ── 导出 ────────────────────────────────────────────────────
-  function handleExport(format) {
-    const dataKey = isKg ? `optitree_kg_${projectId}` : `optitree_data_${projectId}`
+  async function handleExport(format) {
+    if (format !== 'json') { message.info(`${format.toUpperCase()} 导出功能即将上线`); return }
     try {
-      const raw = localStorage.getItem(dataKey)
-      if (!raw) { message.error('无数据可导出'); return }
-      if (format === 'json') {
-        const blob = new Blob([raw], { type: 'application/json' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `${projectName}.json`
-        a.click()
-        URL.revokeObjectURL(url)
-        message.success('已导出 JSON')
-      } else {
-        message.info(`${format.toUpperCase()} 导出功能即将上线`)
-        // TODO: html2canvas 截图导出 PNG，SVG 格式导出
-      }
-    } catch {
-      message.error('导出失败')
+      const blob = isKg
+        ? await exportKnowledgeGraph(projectId)
+        : await exportFaultTree(projectId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${projectName}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      message.success('已导出 JSON')
+    } catch (err) {
+      message.error(err?.message || '导出失败')
     }
   }
 
@@ -219,62 +252,64 @@ export default function Collaboration() {
               }
               className="shadow-sm"
             >
-              {versions.length === 0 ? (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="暂无版本记录，点击「保存当前版本」创建快照"
-                />
-              ) : (
-                <Timeline
-                  items={versions.map((v, i) => ({
-                    dot: i === 0
-                      ? <Badge dot status="processing"><ClockCircleOutlined style={{ fontSize: 12 }} /></Badge>
-                      : <ClockCircleOutlined style={{ fontSize: 12 }} />,
-                    children: (
-                      <div className="flex items-start justify-between group">
-                        <div>
-                          <div className="font-medium text-gray-800 text-sm">
-                            {v.label}
-                            {i === 0 && <Tag color="green" className="ml-2 text-xs">最新</Tag>}
+              <Spin spinning={versionsLoading}>
+                {versions.length === 0 ? (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description="暂无版本记录，点击「保存当前版本」创建快照"
+                  />
+                ) : (
+                  <Timeline
+                    items={versions.map((v, i) => ({
+                      dot: i === 0
+                        ? <Badge dot status="processing"><ClockCircleOutlined style={{ fontSize: 12 }} /></Badge>
+                        : <ClockCircleOutlined style={{ fontSize: 12 }} />,
+                      children: (
+                        <div className="flex items-start justify-between group">
+                          <div>
+                            <div className="font-medium text-gray-800 text-sm">
+                              {v.label}
+                              {i === 0 && <Tag color="green" className="ml-2 text-xs">最新</Tag>}
+                            </div>
+                            <Text className="text-xs text-gray-400">
+                              {new Date(v.createdAt).toLocaleString('zh-CN')}
+                            </Text>
                           </div>
-                          <Text className="text-xs text-gray-400">
-                            {new Date(v.createdAt).toLocaleString('zh-CN')}
-                          </Text>
+                          <Space className="opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Tooltip title="预览">
+                              <Button
+                                type="text"
+                                icon={<EyeOutlined />}
+                                size="small"
+                                onClick={() => setPreviewVersion(v)}
+                              />
+                            </Tooltip>
+                            <Tooltip title="回滚到此版本">
+                              <Popconfirm
+                                title="回滚版本"
+                                description="将以此快照覆盖当前内容，确定吗？"
+                                onConfirm={() => handleRollback(v)}
+                                okText="确定" cancelText="取消"
+                              >
+                                <Button type="text" icon={<RollbackOutlined />} size="small" />
+                              </Popconfirm>
+                            </Tooltip>
+                            <Tooltip title="删除">
+                              <Popconfirm
+                                title="删除版本"
+                                onConfirm={() => handleDeleteVersion(v.id)}
+                                okText="删除" okType="danger" cancelText="取消"
+                              >
+                                <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+                              </Popconfirm>
+                            </Tooltip>
+                          </Space>
                         </div>
-                        <Space className="opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Tooltip title="预览">
-                            <Button
-                              type="text"
-                              icon={<EyeOutlined />}
-                              size="small"
-                              onClick={() => setPreviewVersion(v)}
-                            />
-                          </Tooltip>
-                          <Tooltip title="回滚到此版本">
-                            <Popconfirm
-                              title="回滚版本"
-                              description="将以此快照覆盖当前内容，确定吗？"
-                              onConfirm={() => handleRollback(v)}
-                              okText="确定" cancelText="取消"
-                            >
-                              <Button type="text" icon={<RollbackOutlined />} size="small" />
-                            </Popconfirm>
-                          </Tooltip>
-                          <Tooltip title="删除">
-                            <Popconfirm
-                              title="删除版本"
-                              onConfirm={() => handleDeleteVersion(v.id)}
-                              okText="删除" okType="danger" cancelText="取消"
-                            >
-                              <Button type="text" danger icon={<DeleteOutlined />} size="small" />
-                            </Popconfirm>
-                          </Tooltip>
-                        </Space>
-                      </div>
-                    ),
-                  }))}
-                />
-              )}
+                      ),
+                    }))}
+                  />
+                )}
+              </Spin>
             </Card>
 
             {/* 导出卡片 */}
@@ -303,7 +338,7 @@ export default function Collaboration() {
                 </Button>
               </div>
               <Text className="text-xs text-gray-400 mt-2 block">
-                PNG/SVG 导出需要打开编辑器后截图（TODO: html2canvas 集成）
+                PNG/SVG 导出功能即将上线
               </Text>
             </Card>
           </div>
@@ -329,43 +364,58 @@ export default function Collaboration() {
               }
               className="shadow-sm"
             >
-              <div className="space-y-3">
-                {members.map(m => {
-                  const cfg = ROLE_CONFIG[m.role] ?? ROLE_CONFIG.viewer
-                  return (
-                    <div key={m.id} className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Avatar
-                          size={32}
-                          style={{ background: avatarColor(m.name), flexShrink: 0 }}
-                        >
-                          {initials(m.name)}
-                        </Avatar>
-                        <div>
-                          <p className="text-sm font-medium text-gray-700 leading-none">{m.name}</p>
-                          <Tag color={cfg.color} className="text-xs mt-0.5">{cfg.label}</Tag>
+              <Spin spinning={membersLoading}>
+                <div className="space-y-3">
+                  {members.map(m => {
+                    const cfg = ROLE_CONFIG[m.role] ?? ROLE_CONFIG.viewer
+                    return (
+                      <div key={m.id} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Avatar
+                            size={32}
+                            style={{ background: avatarColor(m.name || m.username || m.email), flexShrink: 0 }}
+                          >
+                            {initials(m.name || m.username || m.email || '?')}
+                          </Avatar>
+                          <div>
+                            <p className="text-sm font-medium text-gray-700 leading-none">
+                              {m.name || m.username || m.email}
+                            </p>
+                            <Select
+                              value={m.role}
+                              size="small"
+                              style={{ width: 90, marginTop: 2 }}
+                              onChange={role => handleRoleChange(m.id, role)}
+                              disabled={m.id === user?.id}
+                              options={Object.entries(ROLE_CONFIG).map(([v, c]) => ({
+                                value: v, label: c.label,
+                              }))}
+                            />
+                          </div>
                         </div>
+                        {m.id !== user?.id && (
+                          <Popconfirm
+                            title="移除成员？"
+                            onConfirm={() => handleRemoveMember(m.id)}
+                            okType="danger" okText="移除" cancelText="取消"
+                          >
+                            <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+                          </Popconfirm>
+                        )}
                       </div>
-                      {m.id !== (user?.id ?? 'self') && (
-                        <Popconfirm
-                          title="移除成员？"
-                          onConfirm={() => handleRemoveMember(m.id)}
-                          okType="danger" okText="移除" cancelText="取消"
-                        >
-                          <Button type="text" danger icon={<DeleteOutlined />} size="small" />
-                        </Popconfirm>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+                    )
+                  })}
+                  {!membersLoading && members.length === 0 && (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无成员" />
+                  )}
+                </div>
+              </Spin>
 
               <Divider style={{ margin: '12px 0 8px' }} />
               <div className="text-xs text-gray-400 space-y-1">
                 <p>• <strong>管理员</strong>：编辑、邀请、删除成员</p>
                 <p>• <strong>编辑者</strong>：编辑图谱内容</p>
                 <p>• <strong>查看者</strong>：只读浏览</p>
-                <p className="text-gray-300 mt-1">TODO: 实时协作需 WebSocket 后端支持</p>
               </div>
             </Card>
           </div>
@@ -402,9 +452,6 @@ export default function Collaboration() {
               }))}
             />
           </div>
-          <Text className="text-xs text-gray-400">
-            TODO: 邮件邀请功能需要后端支持，当前为本地模拟
-          </Text>
         </div>
       </Modal>
 
@@ -425,10 +472,8 @@ export default function Collaboration() {
             <pre>{JSON.stringify(previewVersion.snapshot, null, 2)}</pre>
           </div>
         )}
-        <Text className="text-xs text-gray-400 mt-2 block">
-          TODO: 接入图形化预览渲染（只读模式画布）
-        </Text>
       </Modal>
     </div>
   )
 }
+
