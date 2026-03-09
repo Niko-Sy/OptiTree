@@ -494,12 +494,52 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   useEffect(() => { leftOffsetRef.current  = leftOffset  }, [leftOffset])
   useEffect(() => { rightOffsetRef.current = rightOffset }, [rightOffset])
 
+  // ── 动画相关 refs ────────────────────────────────────────────
+  const svgGroupRef   = useRef(null)   // SVG <g> 变换层
+  const nodesLayerRef = useRef(null)   // HTML 节点 div 变换层
+  const animFrameRef  = useRef(null)   // 当前 rAF handle，用于取消进行中的动画
+
+  // 将 x/y/scale 应用到 DOM 并同步 vtRef（不触发 React 重渲染）
+  const applyVtToDom = useCallback((x, y, scale) => {
+    vtRef.current = { x, y, scale }
+    if (svgGroupRef.current)
+      svgGroupRef.current.style.transform = `translate(${x}px,${y}px) scale(${scale})`
+    if (nodesLayerRef.current)
+      nodesLayerRef.current.style.transform = `translate(${x}px,${y}px) scale(${scale})`
+  }, [])
+
+  // 带动画的视口变换（350ms quadratic ease-in-out）
+  const animateTo = useCallback((targetVt) => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+    const start = { ...vtRef.current }
+    const startTime = performance.now()
+    const DURATION = 350
+    function easeInOut(t) { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t }
+    function tick(now) {
+      const elapsed = now - startTime
+      const progress = Math.min(elapsed / DURATION, 1)
+      const e = easeInOut(progress)
+      const x     = start.x     + (targetVt.x     - start.x)     * e
+      const y     = start.y     + (targetVt.y     - start.y)     * e
+      const scale = start.scale + (targetVt.scale - start.scale) * e
+      applyVtToDom(x, y, scale)
+      if (progress < 1) {
+        animFrameRef.current = requestAnimationFrame(tick)
+      } else {
+        animFrameRef.current = null
+        // 动画结束时同步 React state，触发一次重渲染确保一致性
+        setVt(targetVt)
+      }
+    }
+    animFrameRef.current = requestAnimationFrame(tick)
+  }, [applyVtToDom])
+
   const fitToScreen = useCallback(() => {
     const s = stateRef.current
     if (!containerRef.current) return
     // 仅用可见节点计算包围盒，并扣除左右侧边栏宽度，避免内容被遮挡
     const visNodes = s.nodes.filter(n => !hiddenNodeIdsRef.current.has(n.id))
-    if (visNodes.length === 0) { setVt({ x: 40, y: 40, scale: 1 }); return }
+    if (visNodes.length === 0) { animateTo({ x: 40, y: 40, scale: 1 }); return }
     const rect   = containerRef.current.getBoundingClientRect()
     const lOff   = leftOffsetRef.current
     const rOff   = rightOffsetRef.current
@@ -511,9 +551,9 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
     const sc  = Math.min(MAX_SCALE, Math.max(MIN_SCALE,
       Math.min((usableW - pad * 2) / (maxX - minX || 1), (rect.height - pad * 2) / (maxY - minY || 1))
     ))
-    // 将内容居中在可用区域（左右侧边栏之间）
-    setVt({ scale: sc, x: lOff + (usableW - (minX + maxX) * sc) / 2, y: (rect.height - (minY + maxY) * sc) / 2 })
-  }, [])
+    // 将内容居中在可用区域（左右侧边栏之间），并以动画过渡
+    animateTo({ scale: sc, x: lOff + (usableW - (minX + maxX) * sc) / 2, y: (rect.height - (minY + maxY) * sc) / 2 })
+  }, [animateTo])
 
   // 暴露 fitToScreen 给外部调用（排版后、初始加载后自动触发）
   if (fitRef) fitRef.current = fitToScreen
@@ -978,7 +1018,7 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
     >
       {/* SVG layer: edges + temp line + connection ports + lasso */}
       <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 5, overflow: 'visible', pointerEvents: 'none' }}>
-        <g transform={`translate(${vt.x},${vt.y}) scale(${vt.scale})`}>
+        <g ref={svgGroupRef} style={{ transform: `translate(${vt.x}px,${vt.y}px) scale(${vt.scale})` }}>
           {visibleEdges.map(edge => (
             <EdgePath key={edge.id} edge={edge} nodeMap={nodeMap}
               selected={state.selectedEdgeId === edge.id} onClick={selectEdge} onContextMenu={onEdgeContextMenu}
@@ -1005,6 +1045,7 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
 
       {/* HTML layer: nodes */}
       <div
+        ref={nodesLayerRef}
         className="absolute top-0 left-0 origin-top-left"
         style={{ transform: `translate(${vt.x}px,${vt.y}px) scale(${vt.scale})`, zIndex: 10 }}
       >
