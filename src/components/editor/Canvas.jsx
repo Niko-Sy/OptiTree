@@ -288,6 +288,31 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
   useEffect(() => { modeRef.current = mode }, [mode])
 
   const [collapsedNodes, setCollapsedNodes] = useState(new Set())
+  // Track whether we've done the initial "collapse all" pass
+  const collapsedInitRef = useRef(false)
+
+  // ── 首次加载图数据时，默认收缩所有有子节点的父节点 ────────
+  useEffect(() => {
+    if (collapsedInitRef.current) return
+    if (state.nodes.length === 0) return
+    const parentIds = new Set(state.edges.map(e => e.from))
+    if (parentIds.size === 0) return
+    collapsedInitRef.current = true
+    setCollapsedNodes(parentIds)
+  }, [state.nodes, state.edges])
+
+  // 当图被整体替换（导入等操作）时重置收缩状态（节点数变化超过阈值视为整体替换）
+  const prevNodeCountRef = useRef(0)
+  useEffect(() => {
+    const cur = state.nodes.length
+    const prev = prevNodeCountRef.current
+    // Only re-collapse when it looks like a full graph replacement (not single add/remove)
+    if (collapsedInitRef.current && Math.abs(cur - prev) > 3 && cur > 0) {
+      const parentIds = new Set(state.edges.map(e => e.from))
+      setCollapsedNodes(parentIds)
+    }
+    prevNodeCountRef.current = cur
+  }, [state.nodes.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleCollapse = useCallback((nodeId) => {
     setCollapsedNodes(prev => {

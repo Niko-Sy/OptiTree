@@ -2,17 +2,20 @@
  * KgToolbar — 知识图谱编辑器顶部工具栏
  * 样式与 Toolbar.jsx 完全一致（h-14 bg-white border-b）
  */
-import { useRef } from 'react'
-import { Button, Tooltip, Upload, message, Divider, Tag } from 'antd'
+import { useRef, useState } from 'react'
+import { Button, Tooltip, message, Divider, Tag, Dropdown } from 'antd'
 import {
   ArrowLeftOutlined, UndoOutlined, RedoOutlined,
   DownloadOutlined, UploadOutlined, ApartmentOutlined,
   ThunderboltOutlined, SaveOutlined, TeamOutlined,
+  RobotOutlined, FileImageOutlined, FileSyncOutlined,DownOutlined
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useKnowledgeStore, useKnowledgeActions } from '../../store/useKnowledgeStore'
 import UserAvatar from '../common/UserAvatar'
 import { validateGraph, saveVersion } from '../../services/aiService'
+import { buildKgSVG, downloadSvg, downloadSvgAsPng } from '../../utils/exportUtils'
+import DocumentUploadModal from '../dashboard/DocumentUploadModal'
 
 // ─── Dagre 自动排版（水平树形布局）────────────────────────────────
 function autoLayout(nodes, edges) {
@@ -34,6 +37,8 @@ export default function KgToolbar({ kgName, kgId }) {
   const navigate = useNavigate()
   const { rfNodes, rfEdges, historyIndex, history } = useKnowledgeStore()
   const { setGraph, setAiIssues, undo, redo } = useKnowledgeActions()
+  const fileInputRef = useRef(null)
+  const [showAiImport, setShowAiImport] = useState(false)
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
 
@@ -48,6 +53,24 @@ export default function KgToolbar({ kgName, kgId }) {
     a.click()
     URL.revokeObjectURL(url)
     message.success('已导出 JSON')
+  }
+
+  // ── 导出 SVG ──────────────────────────────────────────────
+  function handleExportSvg() {
+    if (!rfNodes.length) { message.warning('画布为空，无法导出'); return }
+    const svg = buildKgSVG(rfNodes, rfEdges)
+    if (!svg) { message.error('SVG 生成失败'); return }
+    downloadSvg(svg, `${kgName || 'knowledge-graph'}.svg`)
+    message.success('已导出 SVG 文件')
+  }
+
+  // ── 导出 PNG ──────────────────────────────────────────────
+  function handleExportPng() {
+    if (!rfNodes.length) { message.warning('画布为空，无法导出'); return }
+    const svg = buildKgSVG(rfNodes, rfEdges)
+    if (!svg) { message.error('PNG 生成失败'); return }
+    downloadSvgAsPng(svg, `${kgName || 'knowledge-graph'}.png`)
+    message.success('PNG 导出中...')
   }
 
   // ── 导入 JSON ──────────────────────────────────────────────
@@ -65,7 +88,17 @@ export default function KgToolbar({ kgName, kgId }) {
       }
     }
     reader.readAsText(file)
-    return false  // 阻止自动上传
+  }
+
+  // ── AI 导入完成 ─────────────────────────────────────────────
+  function handleAiImportComplete(result) {
+    const nodes = result?.nodes ?? []
+    const edges = result?.edges ?? []
+    if (!nodes.length) { message.warning('AI 生成结果为空'); return }
+    setGraph(nodes, edges)
+    setAiIssues([])
+    setShowAiImport(false)
+    message.success('AI 识别内容已导入画布')
   }
 
   // ── 自动排版 ────────────────────────────────────────────────
@@ -101,6 +134,7 @@ export default function KgToolbar({ kgName, kgId }) {
   }
 
   return (
+    <>
     <div className="h-14 bg-white border-b border-gray-200 flex items-center gap-2 px-4 shrink-0 z-10">
       {/* 返回 */}
       <Tooltip title="返回仪表盘">
@@ -120,17 +154,54 @@ export default function KgToolbar({ kgName, kgId }) {
 
       <span className="mx-1 w-px h-5 bg-gray-200" />
 
-      {/* 导入 */}
-      <Upload accept=".json" beforeUpload={handleImport} showUploadList={false}>
-        <Tooltip title="导入 JSON">
-          <Button icon={<UploadOutlined />} size="small">导入</Button>
-        </Tooltip>
-      </Upload>
+      {/* 隐藏 JSON 文件输入 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        style={{ display: 'none' }}
+        onChange={e => {
+          const file = e.target.files?.[0]
+          if (file) handleImport(file)
+          e.target.value = ''
+        }}
+      />
 
-      {/* 导出 */}
-      <Tooltip title="导出 JSON">
-        <Button icon={<DownloadOutlined />} size="small" onClick={handleExport}>导出</Button>
-      </Tooltip>
+      {/* 导入下拉菜单 */}
+      <Dropdown
+        menu={{
+          items: [
+            { key: 'json', icon: <UploadOutlined />, label: 'JSON 文件导入' },
+            { key: 'ai',   icon: <RobotOutlined />,  label: 'AI 文档识别导入' },
+          ],
+          onClick: ({ key }) => {
+            if (key === 'json') fileInputRef.current?.click()
+            if (key === 'ai')   setShowAiImport(true)
+          },
+        }}
+        trigger={['hover']}
+      >
+        <Button icon={<UploadOutlined />} size="small">导入 <DownOutlined /></Button>
+      </Dropdown>
+
+      {/* 导出下拉菜单 */}
+      <Dropdown
+        menu={{
+          items: [
+            { key: 'json', icon: <DownloadOutlined />,  label: 'JSON' },
+            { key: 'svg',  icon: <FileImageOutlined />, label: 'SVG'  },
+            { key: 'png',  icon: <FileImageOutlined />, label: 'PNG'  },
+          ],
+          onClick: ({ key }) => {
+            if (key === 'json') handleExport()
+            if (key === 'svg')  handleExportSvg()
+            if (key === 'png')  handleExportPng()
+          },
+        }}
+        trigger={['hover']}
+      >
+        <Button icon={<DownloadOutlined />} size="small">导出 <DownOutlined /></Button>
+      </Dropdown>
 
       {/* 另存版本 */}
       <Tooltip title="另存为版本">
@@ -174,8 +245,6 @@ export default function KgToolbar({ kgName, kgId }) {
         </Button>
       </Tooltip>
 
-      
-
       {/* 协作 */}
       <Tooltip title="协作与版本管理">
         <Button
@@ -195,5 +264,14 @@ export default function KgToolbar({ kgName, kgId }) {
       <UserAvatar size={30} />
       </div>
     </div>
+
+    {/* AI 文档识别导入弹窗 */}
+    <DocumentUploadModal
+      open={showAiImport}
+      target="knowledge"
+      onComplete={handleAiImportComplete}
+      onCancel={() => setShowAiImport(false)}
+    />
+    </>
   )
 }

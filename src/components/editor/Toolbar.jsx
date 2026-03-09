@@ -1,10 +1,11 @@
 // 编辑器顶部工具栏组件，包含项目名称、导入/导出、撤销/重做、自动排版、AI 校验等功能按钮
-import { useRef } from 'react'
-import { Button, Tooltip, message, Upload, Tag } from 'antd'
+import { useRef, useState } from 'react'
+import { Button, Tooltip, message, Tag, Dropdown } from 'antd'
 import {
   UndoOutlined, RedoOutlined, DownloadOutlined, UploadOutlined,
   ApartmentOutlined, RobotOutlined, ArrowLeftOutlined, SaveOutlined,
-  TeamOutlined,
+  TeamOutlined, FileImageOutlined, FileSyncOutlined,
+  DownOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { saveVersion } from '../../services/aiService'
@@ -12,6 +13,8 @@ import UserAvatar from '../common/UserAvatar'
 import { useEditorStore, useEditorActions } from '../../store/useEditorStore'
 import { computeLayout } from '../../utils/layoutAlgorithm'
 import { validateFaultTree } from '../../utils/aiValidator'
+import { buildFaultTreeSVG, downloadSvg, downloadSvgAsPng } from '../../utils/exportUtils'
+import DocumentUploadModal from '../dashboard/DocumentUploadModal'
 
 const DEMO_JSON = {
   rootId: 'root',
@@ -112,6 +115,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const fileInputRef = useRef(null)
+  const [showAiImport, setShowAiImport] = useState(false)
 
   const canUndo = state.historyIndex > 0
   const canRedo = state.historyIndex < state.history.length - 1
@@ -174,6 +178,36 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
     message.success('已导出 JSON 文件')
   }
 
+  // ── Export SVG ───────────────────────────────────────────────
+  function handleExportSvg() {
+    if (state.nodes.length === 0) { message.warning('画布为空，无法导出'); return }
+    const svg = buildFaultTreeSVG(state.nodes, state.edges)
+    if (!svg) { message.error('SVG 生成失败'); return }
+    downloadSvg(svg, `${projectName}.svg`)
+    message.success('已导出 SVG 文件')
+  }
+
+  // ── Export PNG ───────────────────────────────────────────────
+  function handleExportPng() {
+    if (state.nodes.length === 0) { message.warning('画布为空，无法导出'); return }
+    const svg = buildFaultTreeSVG(state.nodes, state.edges)
+    if (!svg) { message.error('PNG 生成失败'); return }
+    downloadSvgAsPng(svg, `${projectName}.png`)
+    message.success('PNG 导出中...')
+  }
+
+  // ── AI Import complete ───────────────────────────────────────
+  function handleAiImportComplete(result) {
+    const nodes = (result?.nodes ?? []).map(n => ({ width: 120, height: 60, ...n }))
+    const edges = result?.edges ?? []
+    if (!nodes.length) { message.warning('AI 生成结果为空'); return }
+    const laid = computeLayout(nodes, edges, canvasWidth || 900)
+    setGraph(laid, edges)
+    setAiIssues([])
+    setShowAiImport(false)
+    message.success('AI 识别内容已导入画布')
+  }
+
   // ── Auto Layout ───────────────────────────────────────────────
   function handleAutoLayout() {
     if (state.nodes.length === 0) { message.warning('画布为空，请先添加节点'); return }
@@ -210,6 +244,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
   }
 
   return (
+    <>
     <div className="flex items-center gap-2 px-4 h-14 bg-white border-b border-gray-200 shrink-0 z-20">
       {/* Back */}
       <Tooltip title="返回仪表盘">
@@ -227,20 +262,54 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
 
       <span className="mx-1 w-px h-5 bg-gray-200" />
 
-      {/* Import */}
-      <Upload beforeUpload={handleImportJSON} showUploadList={false} accept=".json">
-        <Tooltip title="导入 JSON 文件">
-          <Button icon={<UploadOutlined />} size="small">导入</Button>
-        </Tooltip>
-      </Upload>
+      {/* 隐藏 JSON 文件输入 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        style={{ display: 'none' }}
+        onChange={e => {
+          const file = e.target.files?.[0]
+          if (file) handleImportJSON(file)
+          e.target.value = ''
+        }}
+      />
 
-      {/* <Tooltip title="加载演示数据">
-        <Button size="small" onClick={handleLoadDemo}>加载示例</Button>
-      </Tooltip> */}
+      {/* Import dropdown */}
+      <Dropdown
+        menu={{
+          items: [
+            { key: 'json', icon: <UploadOutlined />, label: 'JSON 文件导入' },
+            { key: 'ai',   icon: <RobotOutlined />,  label: 'AI 文档识别导入' },
+          ],
+          onClick: ({ key }) => {
+            if (key === 'json') fileInputRef.current?.click()
+            if (key === 'ai')   setShowAiImport(true)
+          },
+        }}
+        trigger={['hover']}
+      >
+        <Button icon={<UploadOutlined />} size="small">导入 <DownOutlined /></Button>
+      </Dropdown>
 
-      <Tooltip title="导出为 JSON">
-        <Button icon={<DownloadOutlined />} size="small" onClick={handleExport}>导出</Button>
-      </Tooltip>
+      {/* Export dropdown */}
+      <Dropdown
+        menu={{
+          items: [
+            { key: 'json', icon: <DownloadOutlined />,  label: 'JSON' },
+            { key: 'svg',  icon: <FileImageOutlined />, label: 'SVG'  },
+            { key: 'png',  icon: <FileImageOutlined />, label: 'PNG'  },
+          ],
+          onClick: ({ key }) => {
+            if (key === 'json') handleExport()
+            if (key === 'svg')  handleExportSvg()
+            if (key === 'png')  handleExportPng()
+          },
+        }}
+        trigger={['hover']}
+      >
+        <Button icon={<DownloadOutlined />} size="small">导出 <DownOutlined /></Button>
+      </Dropdown>
 
       {/* Save Version */}
         <Tooltip title="另存为版本快照">
@@ -311,5 +380,14 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
         <UserAvatar size={30} />
       </div>
     </div>
+
+    {/* AI 文档识别导入弹窗 */}
+    <DocumentUploadModal
+      open={showAiImport}
+      target="faultTree"
+      onComplete={handleAiImportComplete}
+      onCancel={() => setShowAiImport(false)}
+    />
+  </>
   )
 }

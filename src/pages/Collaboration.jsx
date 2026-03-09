@@ -25,6 +25,7 @@ import {
 import { getProject } from '../services/projectService'
 import { exportFaultTree } from '../services/faultTreeService'
 import { exportKnowledgeGraph } from '../services/knowledgeGraphService'
+import { buildFaultTreeSVG, buildKgSVG, downloadSvg, downloadSvgAsPng } from '../utils/exportUtils'
 
 const { Text } = Typography
 
@@ -174,18 +175,50 @@ export default function Collaboration() {
 
   // ── 导出 ────────────────────────────────────────────────────
   async function handleExport(format) {
-    if (format !== 'json') { message.info(`${format.toUpperCase()} 导出功能即将上线`); return }
+    if (format === 'json') {
+      try {
+        const blob = isKg
+          ? await exportKnowledgeGraph(projectId)
+          : await exportFaultTree(projectId)
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${projectName}.json`
+        a.click()
+        URL.revokeObjectURL(url)
+        message.success('已导出 JSON')
+      } catch (err) {
+        message.error(err?.message || '导出失败')
+      }
+      return
+    }
+
+    // SVG / PNG: fetch graph data then render locally
     try {
+      // Reuse the version snapshot from the latest version as source of truth,
+      // or fall back to re-fetching via the export API
       const blob = isKg
         ? await exportKnowledgeGraph(projectId)
         : await exportFaultTree(projectId)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${projectName}.json`
-      a.click()
-      URL.revokeObjectURL(url)
-      message.success('已导出 JSON')
+      const text = await blob.text()
+      const data = JSON.parse(text)
+
+      let svgString
+      if (isKg) {
+        svgString = buildKgSVG(data.rfNodes ?? data.nodes ?? [], data.rfEdges ?? data.edges ?? [])
+      } else {
+        svgString = buildFaultTreeSVG(data.nodes ?? [], data.edges ?? [])
+      }
+
+      if (!svgString) { message.warning('暂无图数据，无法导出'); return }
+
+      if (format === 'svg') {
+        downloadSvg(svgString, `${projectName}.svg`)
+        message.success('已导出 SVG 文件')
+      } else {
+        downloadSvgAsPng(svgString, `${projectName}.png`)
+        message.success('PNG 导出中...')
+      }
     } catch (err) {
       message.error(err?.message || '导出失败')
     }
@@ -337,9 +370,6 @@ export default function Collaboration() {
                   SVG
                 </Button>
               </div>
-              <Text className="text-xs text-gray-400 mt-2 block">
-                PNG/SVG 导出功能即将上线
-              </Text>
             </Card>
           </div>
 

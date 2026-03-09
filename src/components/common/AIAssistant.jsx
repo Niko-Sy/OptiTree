@@ -135,10 +135,19 @@ export default function AIAssistant({ contextType = 'faultTree', getContext }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  // ── 窗口缩放时重新约束位置和面板尺寸 ─────────────────────────
+  // ── 窗口缩放时重新定位（吸附到最近侧边）+ 约束面板尺寸 ────
   useEffect(() => {
     const onResize = () => {
-      setPos(p => clampBtnPos(p.x, p.y))
+      setPos(prev => {
+        const raw = clampBtnPos(prev.x, prev.y)
+        // 保持吸附方向：按钮中心在左半屏吸附左侧，否则吸附右侧
+        const snapToX = raw.x + BTN_SIZE / 2 < window.innerWidth / 2
+          ? EDGE_PAD
+          : window.innerWidth - BTN_SIZE - EDGE_PAD
+        const snapped = { x: snapToX, y: raw.y }
+        try { localStorage.setItem('ai_assistant_position', JSON.stringify(snapped)) } catch {}
+        return snapped
+      })
       setPanelSize(sz => {
         const maxW = Math.floor(window.innerWidth  / 3)
         const maxH = window.innerHeight - TOP_NAV_H - EDGE_PAD
