@@ -4,6 +4,7 @@ import { createContext, useContext, useReducer, useCallback } from 'react'
 const initialState = {
   nodes: [],
   edges: [],
+  layoutType: 'vertical',
   selectedNodeId: null,
   selectedEdgeId: null,
   selectedNodeIds: [],     // multi-select
@@ -32,6 +33,9 @@ function reducer(state, action) {
       const next = { ...state, nodes: action.nodes, edges: action.edges, selectedNodeId: null, aiIssues: [] }
       return pushHistory(next)
     }
+
+    case 'SET_LAYOUT_TYPE':
+      return { ...state, layoutType: action.layoutType }
 
     case 'ADD_NODE': {
       const next = { ...state, nodes: [...state.nodes, action.node] }
@@ -210,6 +214,9 @@ export function useEditorActions() {
   const setGraph = useCallback((nodes, edges) =>
     dispatch({ type: 'SET_GRAPH', nodes, edges }), [dispatch])
 
+  const setLayoutType = useCallback((layoutType) =>
+    dispatch({ type: 'SET_LAYOUT_TYPE', layoutType }), [dispatch])
+
   const addNode = useCallback((node) =>
     dispatch({ type: 'ADD_NODE', node }), [dispatch])
 
@@ -267,5 +274,5 @@ export function useEditorActions() {
   const pasteNodes = useCallback(() =>
     dispatch({ type: 'PASTE_NODES' }), [dispatch])
 
-  return { setGraph, addNode, updateNode, moveNode, commitMove, deleteNode, addEdge, updateEdge, deleteEdge, selectNode, selectEdge, deselect, setAiIssues, undo, redo, selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes }
+  return { setGraph, setLayoutType, addNode, updateNode, moveNode, commitMove, deleteNode, addEdge, updateEdge, deleteEdge, selectNode, selectEdge, deselect, setAiIssues, undo, redo, selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes }
 }

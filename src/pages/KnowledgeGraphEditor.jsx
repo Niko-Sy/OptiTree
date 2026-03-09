@@ -22,6 +22,13 @@ function KnowledgeEditorInner({ kgId, kgName }) {
   const { rfNodes, rfEdges } = useKnowledgeStore()
   const { setGraph } = useKnowledgeActions()
 
+  // rfInstance 引用：由 KgCanvas 通过 onRfInit 回调写入，由 KgToolbar 用于 fitView
+  const rfInstanceRef = useRef(null)
+  // AI 助手引用：由工具栏按鈕触发弹出
+  const aiAssistantRef = useRef(null)
+  // 适应屏幕引用：由 KgCanvas 暴露，供工具栏排版后、初始加载后自动调用
+  const fitRef = useRef(null)
+
   // 为 AI 助手提供当前图数据上下文
   const getContext = useCallback(() => ({
     nodes: rfNodes,
@@ -49,6 +56,8 @@ function KnowledgeEditorInner({ kgId, kgName }) {
         setGraph(n ?? [], e ?? [])
         initDoneRef.current = true
         lastSavedRef.current = JSON.stringify({ rfNodes: n ?? [], rfEdges: e ?? [] })
+        // 初始加载完成后自动适应屏幕
+        setTimeout(() => fitRef.current?.(), 500)
       })
       .catch(err => {
         if (err?.code !== 404) {
@@ -84,15 +93,15 @@ function KnowledgeEditorInner({ kgId, kgName }) {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
-      <KgToolbar kgName={kgName} kgId={kgId} />
-      <div className="flex-1 relative overflow-hidden">
-        <KgCanvas leftOffset={leftOffset} rightOffset={rightOffset} />
+      <KgToolbar kgName={kgName} kgId={kgId} rfInstanceRef={rfInstanceRef} aiAssistantRef={aiAssistantRef} fitRef={fitRef} />
+      <div className="flex-1 relative overflow-hidden kg-canvas-wrapper">
+        <KgCanvas leftOffset={leftOffset} rightOffset={rightOffset} onRfInit={(inst) => { rfInstanceRef.current = inst }} fitRef={fitRef} />
         {/* 左右偏移量仅传入用于 Controls/MiniMap 的内部定位 */}
         <KgEntityPalette collapsed={paletteCollapsed} onCollapsedChange={setPaletteCollapsed} />
         <KgPropertiesPanel collapsed={propsCollapsed} onCollapsedChange={setPropsCollapsed} />
       </div>
       <KgStatusBar />
-      <AIAssistant contextType="knowledgeGraph" getContext={getContext} />
+      <AIAssistant ref={aiAssistantRef} contextType="knowledgeGraph" getContext={getContext} />
     </div>
   )
 }

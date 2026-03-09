@@ -37,7 +37,15 @@ function reducer(state, action) {
   switch (action.type) {
 
     case 'SET_GRAPH': {
-      const { rfNodes, rfEdges } = action
+      const rfNodes = action.rfNodes
+      // 迁移旧格式：将 smoothstep 边改为 floating，清除固定 Handle 引用
+      const rfEdges = (action.rfEdges ?? []).map(e => {
+        if (e.type === 'smoothstep' || e.type == null) {
+          const { sourceHandle: _sh, targetHandle: _th, pathOptions: _po, ...rest } = e
+          return { ...rest, type: 'floating' }
+        }
+        return e
+      })
       const next = { ...state, rfNodes, rfEdges }
       return { ...next, ...pushHistory(next) }
     }
@@ -54,11 +62,16 @@ function reducer(state, action) {
     }
 
     case 'CONNECT': {
-      // React Flow onConnect 添加新边
-      const rfEdges = addEdge(
-        { ...action.connection, type: 'smoothstep', animated: false, label: '' },
-        state.rfEdges
-      )
+      // React Flow onConnect 添加新边（浮动边，不绑定特定 Handle）
+      const conn = {
+        ...action.connection,
+        type: 'floating',
+        animated: false,
+        label: '',
+        sourceHandle: null,
+        targetHandle: null,
+      }
+      const rfEdges = addEdge(conn, state.rfEdges)
       const next = { ...state, rfEdges }
       return { ...next, ...pushHistory(next) }
     }

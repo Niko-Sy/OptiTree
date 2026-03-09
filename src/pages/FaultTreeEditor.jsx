@@ -25,8 +25,14 @@ function EditorInner({ projectId, projectName }) {
   }), [state.nodes, state.edges])
 
   const canvasWidthRef = useRef(null)
+  // AI 助手引用：由工具栏按钮触发弹出
+  const aiAssistantRef = useRef(null)
+  // 适应屏幕引用：由 Canvas 暴露，供工具栏排版后、初始加载后自动调用
+  const fitRef = useRef(null)
   const [propsPanelCollapsed, setPropsPanelCollapsed] = useState(false)
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const rightOffset = propsPanelCollapsed ? 0 : 256
+  const leftOffset = paletteCollapsed ? 0 : 208
 
   // 加载初始化标志 & 自动保存状态追踪
   const initDoneRef  = useRef(false)
@@ -50,6 +56,8 @@ function EditorInner({ projectId, projectName }) {
         setGraph(finalNodes, e)
         initDoneRef.current = true
         lastSavedRef.current = JSON.stringify({ nodes: finalNodes, edges: e })
+        // 初始加载完成后自动适应屏幕（等待 collapse 状态和节点渲染就绪）
+        setTimeout(() => fitRef.current?.(), 450)
       })
       .catch(err => {
         if (err?.code !== 404) {
@@ -88,14 +96,16 @@ function EditorInner({ projectId, projectName }) {
       <Toolbar
         projectName={projectName}
         canvasWidth={canvasWidthRef.current?.() || 900}
+        aiAssistantRef={aiAssistantRef}
+        fitRef={fitRef}
       />
       <div className="flex-1 relative overflow-hidden">
-        <Canvas onSizeRef={canvasWidthRef} rightOffset={rightOffset} />
-        <NodePalette />
+        <Canvas onSizeRef={canvasWidthRef} rightOffset={rightOffset} leftOffset={leftOffset} fitRef={fitRef} />
+        <NodePalette collapsed={paletteCollapsed} onCollapsedChange={setPaletteCollapsed} />
         <PropertiesPanel collapsed={propsPanelCollapsed} onCollapsedChange={setPropsPanelCollapsed} />
       </div>
       <StatusBar />
-      <AIAssistant contextType="faultTree" getContext={getContext} />
+      <AIAssistant ref={aiAssistantRef} contextType="faultTree" getContext={getContext} />
     </div>
   )
 }

@@ -13,7 +13,7 @@
  *   - 10s 无操作显示方向自适应气泡提示
  *   - 调用 aiService.chatWithAI 获取 AI 回复
  */
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { Input, Spin, Tag, Tooltip } from 'antd'
 import {
   RobotOutlined,
@@ -31,8 +31,8 @@ const SNAP_MS        = 580   // 吸附弹性动画时长
 const IDLE_MS        = 5000 // 无操作提示气泡触发时间
 const BUBBLE_W       = 186   // 气泡估算总宽（文字 + 内边距 + 箭头）
 const DRAG_THRESHOLD = 5
-const PANEL_MIN_W    = 240
-const PANEL_MIN_H    = 300
+const PANEL_MIN_W    = 280   // 面板最小宽度
+const PANEL_MIN_H    = 400   // 面板最小高度
 
 const CONTEXT_LABELS = {
   faultTree:      '故障树助手',
@@ -65,7 +65,8 @@ function getSavedPosition() {
       return clampBtnPos(x, y)
     }
   } catch {}
-  return clampBtnPos(window.innerWidth - 96, window.innerHeight - 96)
+  // return clampBtnPos(window.innerWidth - 96, window.innerHeight - 96)
+  return clampBtnPos(0, window.innerHeight - 96)
 }
 
 // 计算对话面板位置（不盖导航栏）
@@ -111,7 +112,7 @@ function MessageBubble({ role, content }) {
 }
 
 // ─── 主组件 ──────────────────────────────────────────────────────────
-export default function AIAssistant({ contextType = 'faultTree', getContext }) {
+const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree', getContext }, ref) {
   const [pos,        setPos]        = useState(() => getSavedPosition())
   const [isSnapping, setIsSnapping] = useState(false)
   const [isOpen,     setIsOpen]     = useState(false)
@@ -127,6 +128,12 @@ export default function AIAssistant({ contextType = 'faultTree', getContext }) {
 
   // 按钮拖拽状态（ref 保持引用稳定）
   const btnDrag = useRef({ active: false, startMX: 0, startMY: 0, startBX: 0, startBY: 0, moved: false })
+
+  // 暴露 open() 方法给外部调用
+  useImperativeHandle(ref, () => ({
+    open: () => setIsOpen(true),
+  }))
+
   // 面板缩放状态
   const resizeRef = useRef({ active: false, edge: null, startMX: 0, startMY: 0, startW: 0, startH: 0 })
 
@@ -539,7 +546,7 @@ export default function AIAssistant({ contextType = 'faultTree', getContext }) {
       </div>
     </>
   )
-}
+})
 
 // ─── 共享样式对象 ────────────────────────────────────────────────────
 const TOOL_BTN = {
@@ -553,4 +560,6 @@ const BUBBLE_TEXT = {
   padding: '7px 13px', fontSize: 13, color: '#1a1a1a',
   whiteSpace: 'nowrap', lineHeight: 1.5, fontWeight: 500,
 }
+
+export default AIAssistant
 

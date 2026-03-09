@@ -5,13 +5,19 @@ import {
   UndoOutlined, RedoOutlined, DownloadOutlined, UploadOutlined,
   ApartmentOutlined, RobotOutlined, ArrowLeftOutlined, SaveOutlined,
   TeamOutlined, FileImageOutlined, FileSyncOutlined,
-  DownOutlined,
+  DownOutlined, ThunderboltOutlined,CheckOutlined
 } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { saveVersion } from '../../services/aiService'
 import UserAvatar from '../common/UserAvatar'
 import { useEditorStore, useEditorActions } from '../../store/useEditorStore'
-import { computeLayout } from '../../utils/layoutAlgorithm'
+import {
+  computeLayout,
+  computeHorizontalLayout,
+  computeGridLayout,
+  computeForceLayout,
+  selectAnchorsByLayout,
+} from '../../utils/layoutAlgorithm'
 import { validateFaultTree } from '../../utils/aiValidator'
 import { buildFaultTreeSVG, downloadSvg, downloadSvgAsPng } from '../../utils/exportUtils'
 import DocumentUploadModal from '../dashboard/DocumentUploadModal'
@@ -109,9 +115,9 @@ function parseStandardFormat(json) {
   return { nodes, edges }
 }
 
-export default function Toolbar({ projectName = '未命名项目', canvasWidth }) {
+export default function Toolbar({ projectName = '未命名项目', canvasWidth, aiAssistantRef, fitRef }) {
   const { state } = useEditorStore()
-  const { setGraph, setAiIssues, undo, redo } = useEditorActions()
+  const { setGraph, setLayoutType, setAiIssues, undo, redo } = useEditorActions()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const fileInputRef = useRef(null)
@@ -119,6 +125,18 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
 
   const canUndo = state.historyIndex > 0
   const canRedo = state.historyIndex < state.history.length - 1
+
+  function withLayoutAnchors(nodes, edges, layoutType) {
+    const nodeMap = {}
+    nodes.forEach(n => { nodeMap[n.id] = n })
+    return edges.map(e => {
+      const fromNode = nodeMap[e.from]
+      const toNode = nodeMap[e.to]
+      if (!fromNode || !toNode) return e
+      const pick = selectAnchorsByLayout(fromNode, toNode, layoutType)
+      return { ...e, fromAnchor: pick.fromAnchor, toAnchor: pick.toAnchor }
+    })
+  }
 
   // ── Import JSON ───────────────────────────────────────────────
   function handleImportJSON(file) {
@@ -137,8 +155,11 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
           message.success('JSON 导入成功，已自动排版')
         }
 
+        const layoutType = 'vertical'
         const laid = computeLayout(nodes, edges, canvasWidth || 900)
-        setGraph(laid, edges)
+        const anchoredEdges = withLayoutAnchors(laid, edges, layoutType)
+        setLayoutType(layoutType)
+        setGraph(laid, anchoredEdges)
         setAiIssues([])
       } catch (err) {
         message.error('JSON 格式解析失败，请检查文件内容')
@@ -153,8 +174,11 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
   function handleLoadDemo() {
     const rawNodes = DEMO_JSON.nodes.map(n => ({ width: 120, height: 60, ...n }))
     const edges = DEMO_JSON.edges
+    const layoutType = 'vertical'
     const laid = computeLayout(rawNodes, edges, canvasWidth || 900)
-    setGraph(laid, edges)
+    const anchoredEdges = withLayoutAnchors(laid, edges, layoutType)
+    setLayoutType(layoutType)
+    setGraph(laid, anchoredEdges)
     setAiIssues([])
     message.success('示例数据已加载')
   }
@@ -201,28 +225,51 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
     const nodes = (result?.nodes ?? []).map(n => ({ width: 120, height: 60, ...n }))
     const edges = result?.edges ?? []
     if (!nodes.length) { message.warning('AI 生成结果为空'); return }
+    const layoutType = 'vertical'
     const laid = computeLayout(nodes, edges, canvasWidth || 900)
-    setGraph(laid, edges)
+    const anchoredEdges = withLayoutAnchors(laid, edges, layoutType)
+    setLayoutType(layoutType)
+    setGraph(laid, anchoredEdges)
     setAiIssues([])
     setShowAiImport(false)
     message.success('AI 识别内容已导入画布')
   }
 
   // ── Auto Layout ───────────────────────────────────────────────
-  function handleAutoLayout() {
+  function handleApplyLayout(kind) {
     if (state.nodes.length === 0) { message.warning('画布为空，请先添加节点'); return }
-    const laid = computeLayout(state.nodes, state.edges, canvasWidth || 900)
-    setGraph(laid, state.edges)
-    message.success('自动排版完成')
+
+    const laid = kind === 'horizontal'
+      ? computeHorizontalLayout(state.nodes, state.edges)
+      : kind === 'grid'
+        ? computeGridLayout(state.nodes, state.edges)
+        : kind === 'force'
+          ? computeForceLayout(state.nodes, state.edges)
+          : computeLayout(state.nodes, state.edges, canvasWidth || 900)
+    const layoutType = kind === 'horizontal' || kind === 'grid' || kind === 'force' ? kind : 'vertical'
+    const anchoredEdges = withLayoutAnchors(laid, state.edges, layoutType)
+
+    setLayoutType(layoutType)
+    setGraph(laid, anchoredEdges)
+    const label = kind === 'horizontal'
+      ? '横向树形'
+      : kind === 'grid'
+        ? '均匀网格'
+        : kind === 'force'
+          ? '力导向'
+          : '竖向树形'
+    message.success(`已应用${label}排版`)
+    // 排版完成后自动适应屏幕
+    setTimeout(() => fitRef?.current?.(), 100)
   }
 
-  // ── AI Validation ─────────────────────────────────────────────
+  // ── Logic Validation ─────────────────────────────────────────────
   function handleAiCheck() {
     if (state.nodes.length === 0) { message.warning('画布为空，无法校验'); return }
     const issues = validateFaultTree(state.nodes, state.edges)
     setAiIssues(issues)
     if (issues.length === 0) {
-      message.success('AI 校验通过：逻辑结构无异常')
+      message.success('逻辑校验通过：逻辑结构无异常')
     } else {
       const errors = issues.filter(i => i.level === 'error').length
       const warnings = issues.filter(i => i.level === 'warning').length
@@ -335,26 +382,42 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth }
       <span className="mx-1 w-px h-5 bg-gray-200" />
 
       <div className="ml-auto flex gap-2 items-center justify-center">
-        {/* Auto Layout */}
-        <Tooltip title="BFS 树形自动排版">
-          <Button
-            icon={<ApartmentOutlined />}
-            size="small"
-            onClick={handleAutoLayout}
-          >
-            排版
-          </Button>
-        </Tooltip>
+        <Dropdown
+          menu={{
+            items: [
+              { key: 'vertical', icon: <ApartmentOutlined />, label: '竖向树形' },
+              { key: 'horizontal', icon: <ApartmentOutlined />, label: '横向树形' },
+              { key: 'grid', icon: <ApartmentOutlined />, label: '均匀网格' },
+              { key: 'force', icon: <ApartmentOutlined />, label: '力导向（复杂连接）' },
+            ],
+            onClick: ({ key }) => handleApplyLayout(key),
+          }}
+          trigger={['hover']}
+        >
+          <Button icon={<ApartmentOutlined />} size="small">排版 <DownOutlined /></Button>
+        </Dropdown>
 
-        {/* AI Check */}
-        <Tooltip title="AI 逻辑校验">
+        {/* 逻辑校验 */}
+        <Tooltip title="故障树逻辑校验">
           <Button
-            type="primary"
-            icon={<RobotOutlined />}
+            icon={<CheckOutlined />}
             size="small"
             onClick={handleAiCheck}
           >
-            AI 校验
+            逻辑校验
+          </Button>
+        </Tooltip>
+
+        {/* AI 助手 */}
+        <Tooltip title="AI 逻辑分析">
+          <Button
+            icon={<ThunderboltOutlined />}
+            size="small"
+            type="primary"
+            ghost
+            onClick={() => aiAssistantRef?.current?.open()}
+          >
+            AI 助手
           </Button>
         </Tooltip>
 

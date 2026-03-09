@@ -26,7 +26,8 @@ const ENTITY_TYPE_OPTIONS = Object.entries(ENTITY_TYPES).map(([value, cfg]) => (
 
 // 连接线形状选项
 const EDGE_TYPE_OPTIONS = [
-  { value: 'smoothstep', label: '折线（默认）' },
+  { value: 'floating',   label: '自动（浮动边）' },
+  { value: 'smoothstep', label: '折线' },
   { value: 'bezier',     label: '曲线' },
   { value: 'straight',   label: '直线' },
   { value: 'step',       label: '阶梯线' },
@@ -62,7 +63,7 @@ export default function KgPropertiesPanel({ collapsed, onCollapsedChange }) {
     } else if (selectedEdge) {
       form.setFieldsValue({
         edgeLabel: selectedEdge.label              ?? '',
-        edgeType:  selectedEdge.type               ?? 'smoothstep',
+        edgeType:  selectedEdge.type               ?? 'floating',
         edgeColor: selectedEdge.style?.stroke      ?? '#94a3b8',
         animated:  selectedEdge.animated           ?? false,
       })
@@ -91,6 +92,10 @@ export default function KgPropertiesPanel({ collapsed, onCollapsedChange }) {
   function handleApplyEdge() {
     const vals = form.getFieldsValue()
     if (!selectedEdge) return
+    // 切换为浮动边时清除固定 Handle，避免干扰动态路由
+    const handleReset = vals.edgeType === 'floating'
+      ? { sourceHandle: null, targetHandle: null, pathOptions: undefined }
+      : {}
     updateEdge(selectedEdge.id, {
       label:    vals.edgeLabel,
       type:     vals.edgeType,
@@ -102,6 +107,7 @@ export default function KgPropertiesPanel({ collapsed, onCollapsedChange }) {
       },
       labelStyle:   { fontSize: 11, fill: '#64748b' },
       labelBgStyle: { fill: '#fff', fillOpacity: 0.85 },
+      ...handleReset,
     })
   }
 

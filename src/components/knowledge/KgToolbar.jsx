@@ -8,32 +8,23 @@ import {
   ArrowLeftOutlined, UndoOutlined, RedoOutlined,
   DownloadOutlined, UploadOutlined, ApartmentOutlined,
   ThunderboltOutlined, SaveOutlined, TeamOutlined,
-  RobotOutlined, FileImageOutlined, FileSyncOutlined,DownOutlined
+  RobotOutlined, FileImageOutlined, FileSyncOutlined, DownOutlined,
+  RadarChartOutlined, AppstoreOutlined, ClusterOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useKnowledgeStore, useKnowledgeActions } from '../../store/useKnowledgeStore'
 import UserAvatar from '../common/UserAvatar'
 import { validateGraph, saveVersion } from '../../services/aiService'
 import { buildKgSVG, downloadSvg, downloadSvgAsPng } from '../../utils/exportUtils'
+import {
+  applyDagreLayout, resolveOverlaps,
+  applyCircularLayout, applyKgCompactGridLayout,
+  assignParallelEdgeOffsets, applyClusteredLayout,
+} from '../../utils/layoutAlgorithm'
 import DocumentUploadModal from '../dashboard/DocumentUploadModal'
 
-// ─── Dagre 自动排版（水平树形布局）────────────────────────────────
-function autoLayout(nodes, edges) {
-  if (!nodes.length) return nodes
-  // 简单的层级排版（TODO: 接入 dagre 或力导向布局）
-  // 将节点按连通性排布，此处做基础的格状排布
-  const cols = Math.ceil(Math.sqrt(nodes.length))
-  const gap = 180
-  return nodes.map((n, i) => ({
-    ...n,
-    position: {
-      x: (i % cols) * gap + 80,
-      y: Math.floor(i / cols) * 120 + 60,
-    },
-  }))
-}
-
-export default function KgToolbar({ kgName, kgId }) {
+// ─── 工具栏主组件 ────────────────────────────────────────────────────
+export default function KgToolbar({ kgName, kgId, rfInstanceRef, aiAssistantRef, fitRef }) {
   const navigate = useNavigate()
   const { rfNodes, rfEdges, historyIndex, history } = useKnowledgeStore()
   const { setGraph, setAiIssues, undo, redo } = useKnowledgeActions()
@@ -101,25 +92,48 @@ export default function KgToolbar({ kgName, kgId }) {
     message.success('AI 识别内容已导入画布')
   }
 
-  // ── 自动排版 ────────────────────────────────────────────────
-  function handleLayout() {
-    const newNodes = autoLayout(rfNodes, rfEdges)
-    setGraph(newNodes, rfEdges)
-    message.success('已应用自动排版')
-    // TODO: 接入 dagre 力导向布局
+  // ── 自动排版（多策略：3A 排版菜单 + 3B 碰撞检测 + 3C 并行多边 + 3D CSS动画 + 3E 聚类）──
+  // layoutKey: 'TB' | 'LR' | 'circular' | 'grid' | 'cluster'
+  function handleLayout(layoutKey = 'TB') {
+    if (!rfNodes.length) { message.warning('画布为空，无需排版'); return }
+
+    // 1. 选择布局算法（3A）
+    let targetNodes
+    switch (layoutKey) {
+      case 'LR':       targetNodes = applyDagreLayout(rfNodes, rfEdges, { direction: 'LR' }); break
+      case 'circular': targetNodes = applyCircularLayout(rfNodes, rfEdges);                    break
+      case 'grid':     targetNodes = applyKgCompactGridLayout(rfNodes, rfEdges);               break
+      case 'cluster':  targetNodes = applyClusteredLayout(rfNodes, rfEdges);                   break
+      default:         targetNodes = applyDagreLayout(rfNodes, rfEdges, { direction: 'TB' })
+    }
+
+    // 2. 碰撞检测 — 推开重叠节点（3B；cluster 内部已处理，此处再跑一轮进一步保障）
+    targetNodes = resolveOverlaps(targetNodes)
+
+    // 3. 清除固定 Handle 引用（浮动边模式无需绑定 Handle）
+    const edges0 = rfEdges.map(({ sourceHandle: _sh, targetHandle: _th, ...rest }) => rest)
+
+    // 4. 并行多边曲率偏移（3C）
+    const targetEdges = assignParallelEdgeOffsets(edges0)
+
+    // 5. 更新 store — CSS transition 自动完成过渡动画（3D）
+    setGraph(targetNodes, targetEdges)
+
+    const labels = {
+      TB: '纵向层次排版', LR: '横向层次排版',
+      circular: '环形排版', grid: '紧凑网格排版', cluster: '类型聚类排版',
+    }
+    message.success(`已应用${labels[layoutKey] ?? '自动排版'}`)
+
+    // 6. CSS transition（380ms）结束后适应屏幕
+    setTimeout(() => {
+      fitRef?.current?.()
+    }, 430)
   }
 
-  // ── AI 分析 ─────────────────────────────────────────────────
-  async function handleAiAnalyze() {
-    message.loading({ content: 'AI 分析中...', key: 'kg-ai' })
-    try {
-      const { issues } = await validateGraph(rfNodes, rfEdges, 'knowledge')
-      setAiIssues(issues)
-      message.success({ content: `分析完成，发现 ${issues.length} 个问题`, key: 'kg-ai' })
-      // TODO: 接入大模型实体关系推理与优化建议
-    } catch {
-      message.error({ content: 'AI 分析失败', key: 'kg-ai' })
-    }
+  // ── AI 助手 ─────────────────────────────────────────────────
+  function handleAiAnalyze() {
+    aiAssistantRef?.current?.open()
   }
 
   // ── 另存为版本 ──────────────────────────────────────────────
@@ -227,13 +241,26 @@ export default function KgToolbar({ kgName, kgId }) {
 
 
       <div className="ml-auto flex gap-2 items-center justify-center">
-      {/* 自动排版 */}
-      <Tooltip title="自动排版">
-        <Button icon={<ApartmentOutlined />} size="small" onClick={handleLayout}>排版</Button>
-      </Tooltip>
+      {/* 自动排版：多策略下拉菜单 (3A) */}
+      <Dropdown
+        menu={{
+          items: [
+            { key: 'TB',       icon: <ApartmentOutlined />,                                              label: '纵向层次（上→下）' },
+            { key: 'LR',       icon: <ApartmentOutlined style={{ transform: 'rotate(90deg)' }} />,       label: '横向层次（左→右）' },
+            { type: 'divider' },
+            { key: 'circular', icon: <RadarChartOutlined />,                                             label: '环形布局' },
+            { key: 'grid',     icon: <AppstoreOutlined />,                                               label: '紧凑网格' },
+            { key: 'cluster',  icon: <ClusterOutlined />,                                                label: '类型聚类' },
+          ],
+          onClick: ({ key }) => handleLayout(key),
+        }}
+        trigger={['click']}
+      >
+        <Button icon={<ApartmentOutlined />} size="small">排版 <DownOutlined /></Button>
+      </Dropdown>
 
-      {/* AI 分析 */}
-      <Tooltip title="AI 逻辑分析">
+      {/* AI 助手 */}
+      <Tooltip title="AI 助手">
         <Button
           icon={<ThunderboltOutlined />}
           size="small"
@@ -241,7 +268,7 @@ export default function KgToolbar({ kgName, kgId }) {
           ghost
           onClick={handleAiAnalyze}
         >
-          AI 分析
+          AI 助手
         </Button>
       </Tooltip>
 

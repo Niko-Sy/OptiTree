@@ -49,3 +49,27 @@
 .ai-bubble-enter {
   animation: ai-bubble-enter 0.2s ease-out forwards;
 }
+
+/* ─── 知识图谱节点端点：悬停时才显示 ────────────────────────────── */
+.kg-node .react-flow__handle {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+/* 悬停节点或节点被选中时显示端点 */
+.react-flow__node:hover .kg-node .react-flow__handle,
+.react-flow__node.selected .kg-node .react-flow__handle {
+  opacity: 1;
+}
+/* 连接拖拽进行中：所有节点端点均可见（便于找到目标） */
+.react-flow__renderer.connecting .react-flow__node .kg-node .react-flow__handle {
+  opacity: 1;
+}
+
+/* ─── 知识图谱画布：排版动画（3D — CSS transform 过渡）────────────── */
+/* 点击排版按钮时，节点平滑移动到新位置；拖动时禁用过渡防止卡顿 */
+.kg-canvas-wrapper .react-flow__node {
+  transition: transform 380ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.kg-canvas-wrapper .react-flow__node.dragging {
+  transition: none !important;
+}

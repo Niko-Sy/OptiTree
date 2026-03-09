@@ -4,20 +4,52 @@ import { Tooltip, message } from 'antd'
 import {
   ArrowsAltOutlined, DragOutlined, LinkOutlined,
   ZoomInOutlined, ZoomOutOutlined, CompressOutlined,
+  PlusSquareOutlined, MinusSquareOutlined,
 } from '@ant-design/icons'
 import { useEditorStore, useEditorActions } from '../../store/useEditorStore'
 import { GateSymbol, GATE_CONFIG } from './GateSymbol'
+import { selectAnchorsByLayout } from '../../utils/layoutAlgorithm'
 
-const MIN_SCALE = 0.15
-const MAX_SCALE = 3
-const ZOOM_STEP = 0.12
+const MIN_SCALE = 0.30
+const MAX_SCALE = 2.0
+const ZOOM_STEP = 0.10
+
+const ANCHOR_KEYS = ['top', 'right', 'bottom', 'left']
+
+function getAnchorPoint(node, anchor) {
+  switch (anchor) {
+    case 'top':
+      return { x: node.x, y: node.y }
+    case 'right':
+      return { x: node.x + node.width / 2, y: node.y + node.height / 2 }
+    case 'left':
+      return { x: node.x - node.width / 2, y: node.y + node.height / 2 }
+    case 'bottom':
+    default:
+      return { x: node.x, y: node.y + node.height }
+  }
+}
+
+function getCtrlOffset(anchor, dist = 80) {
+  switch (anchor) {
+    case 'top':
+      return [0, -dist]
+    case 'right':
+      return [dist, 0]
+    case 'left':
+      return [-dist, 0]
+    case 'bottom':
+    default:
+      return [0, dist]
+  }
+}
 
 
 
 // ── Single Node (HTML div) ──────────────────────────────────────
 const FaultNode = memo(function FaultNode({
   node, selected, multiSelected, isConnectFrom, mode,
-  onMouseDown, onClick, onMouseEnter, onMouseLeave, onContextMenu, onDragStart,
+  onMouseDown, onClick, onContextMenu, onDragStart, onHandleClick,
   hasChildren, isCollapsed, onToggleCollapse,
 }) {
   const typeClass = {
@@ -54,10 +86,52 @@ const FaultNode = memo(function FaultNode({
       onMouseDown={e => onMouseDown(e, node)}
       onClick={e => { e.stopPropagation(); onClick(node, e) }}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onContextMenu(e, node) }}
-      onMouseEnter={() => onMouseEnter(node.id)}
-      onMouseLeave={() => onMouseLeave()}
       onDragStart={e => onDragStart(e, node)}
     >
+      {mode === 'connect' && ANCHOR_KEYS.map(anchor => {
+        const posStyle = anchor === 'top'
+          ? { top: -6, left: '50%', transform: 'translateX(-50%) scale(1)' }
+          : anchor === 'bottom'
+            ? { bottom: -6, left: '50%', transform: 'translateX(-50%) scale(1)' }
+            : anchor === 'left'
+              ? { left: -6, top: '50%', transform: 'translateY(-50%) scale(1)' }
+              : { right: -6, top: '50%', transform: 'translateY(-50%) scale(1)' }
+
+        return (
+          <button
+            key={`${node.id}-${anchor}`}
+            type="button"
+            style={{
+              position: 'absolute',
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              border: '2px solid #1677ff',
+              background: '#fff',
+              zIndex: 6,
+              cursor: 'crosshair',
+              padding: 0,
+              transition: 'transform 0.15s ease',
+              ...posStyle,
+            }}
+            onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
+            onClick={e => {
+              e.stopPropagation()
+              onHandleClick(node.id, anchor)
+            }}
+            onMouseEnter={e => {
+              const t = anchor === 'top' || anchor === 'bottom' ? 'translateX(-50%)' : 'translateY(-50%)'
+              e.currentTarget.style.transform = `${t} scale(1.17)`
+            }}
+            onMouseLeave={e => {
+              const t = anchor === 'top' || anchor === 'bottom' ? 'translateX(-50%)' : 'translateY(-50%)'
+              e.currentTarget.style.transform = `${t} scale(1)`
+            }}
+            title={`从${anchor}端点连线`}
+          />
+        )
+      })}
+
       {/* Expand/collapse button for topEvent and midEvent nodes with children */}
       {(node.type === 'topEvent' || node.type === 'midEvent') && hasChildren && (
         <button
@@ -114,10 +188,16 @@ const FaultNode = memo(function FaultNode({
 const EdgePath = memo(function EdgePath({ edge, nodeMap, selected, onClick, onContextMenu, onMidMouseDown }) {
   const p = nodeMap[edge.from]; const c = nodeMap[edge.to]
   if (!p || !c) return null
-  const sx = p.x, sy = p.y + p.height, ex = c.x, ey = c.y
+  const fromAnchor = edge.fromAnchor || 'bottom'
+  const toAnchor = edge.toAnchor || 'top'
+  const start = getAnchorPoint(p, fromAnchor)
+  const end = getAnchorPoint(c, toAnchor)
+  const sx = start.x, sy = start.y, ex = end.x, ey = end.y
+  const [fromDx, fromDy] = getCtrlOffset(fromAnchor)
+  const [toDx, toDy] = getCtrlOffset(toAnchor)
   const bx = edge.bendX || 0, by = edge.bendY || 0
-  const cp1x = sx + bx * 0.5, cp1y = sy + 50 + by * 0.5
-  const cp2x = ex + bx * 0.5, cp2y = ey - 50 + by * 0.5
+  const cp1x = sx + fromDx + bx * 0.5, cp1y = sy + fromDy + by * 0.5
+  const cp2x = ex + toDx + bx * 0.5, cp2y = ey + toDy + by * 0.5
   const d = `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${ex} ${ey}`
   // Approximate bezier midpoint at t=0.5
   const hmx = (sx + cp1x * 3 + cp2x * 3 + ex) / 8
@@ -143,7 +223,7 @@ const EdgePath = memo(function EdgePath({ edge, nodeMap, selected, onClick, onCo
 })
 
 // ── Canvas Controls (bottom-right) ──────────────────────────────
-function CanvasControls({ mode, setMode, scale, onZoomIn, onZoomOut, onFit, rightOffset = 0 }) {
+function CanvasControls({ mode, setMode, scale, onZoomIn, onZoomOut, onFit, onExpandAll, onCollapseAll, rightOffset = 0 }) {
   const modes = [
     { key: 'select',  icon: <ArrowsAltOutlined />, tip: '选择 / 移动节点 (V)' },
     { key: 'pan',     icon: <DragOutlined />,       tip: '平移画布 (H)' },
@@ -152,7 +232,7 @@ function CanvasControls({ mode, setMode, scale, onZoomIn, onZoomOut, onFit, righ
   return (
     <div
       className="absolute bottom-4 flex flex-col gap-2 z-30 select-none transition-all duration-200"
-      style={{ right: rightOffset + 16 }}
+      style={{ right: rightOffset + 24 }}
     >
       <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden flex flex-col">
         {modes.map(btn => (
@@ -166,6 +246,16 @@ function CanvasControls({ mode, setMode, scale, onZoomIn, onZoomOut, onFit, righ
             >{btn.icon}</button>
           </Tooltip>
         ))}
+      </div>
+      <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden flex flex-col">
+        <Tooltip title="展开所有节点" placement="left">
+          <button className="w-9 h-9 flex items-center justify-center text-gray-600 hover:bg-gray-100"
+            onClick={onExpandAll}><PlusSquareOutlined /></button>
+        </Tooltip>
+        <Tooltip title="收缩所有节点" placement="left">
+          <button className="w-9 h-9 flex items-center justify-center text-gray-600 hover:bg-gray-100 border-t border-gray-100"
+            onClick={onCollapseAll}><MinusSquareOutlined /></button>
+        </Tooltip>
       </div>
       <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden flex flex-col items-center">
         <Tooltip title="放大 (+)" placement="left">
@@ -274,7 +364,7 @@ function ContextMenu({ menu, onClose, state, deleteEdge, deleteNode, onCopy, onP
 }
 
 // ── Main Canvas ─────────────────────────────────────────────────
-export default function Canvas({ onSizeRef, rightOffset = 0 }) {
+export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, fitRef }) {
   const { state } = useEditorStore()
   const { addNode, moveNode, commitMove, selectNode, selectEdge, deselect, addEdge, deleteEdge, deleteNode, undo, redo, updateEdge, selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes } = useEditorActions()
   const containerRef = useRef(null)
@@ -295,7 +385,16 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
   useEffect(() => {
     if (collapsedInitRef.current) return
     if (state.nodes.length === 0) return
-    const parentIds = new Set(state.edges.map(e => e.from))
+    const nodeMap = {}
+    state.nodes.forEach(n => { nodeMap[n.id] = n })
+    const parentIds = new Set(
+      state.edges
+        .map(e => e.from)
+        .filter(id => {
+          const t = nodeMap[id]?.type
+          return t === 'topEvent' || t === 'midEvent'
+        })
+    )
     if (parentIds.size === 0) return
     collapsedInitRef.current = true
     setCollapsedNodes(parentIds)
@@ -308,7 +407,16 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
     const prev = prevNodeCountRef.current
     // Only re-collapse when it looks like a full graph replacement (not single add/remove)
     if (collapsedInitRef.current && Math.abs(cur - prev) > 3 && cur > 0) {
-      const parentIds = new Set(state.edges.map(e => e.from))
+      const nodeMap = {}
+      state.nodes.forEach(n => { nodeMap[n.id] = n })
+      const parentIds = new Set(
+        state.edges
+          .map(e => e.from)
+          .filter(id => {
+            const t = nodeMap[id]?.type
+            return t === 'topEvent' || t === 'midEvent'
+          })
+      )
       setCollapsedNodes(parentIds)
     }
     prevNodeCountRef.current = cur
@@ -323,12 +431,30 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
     })
   }, [])
 
+  // 一键展开 / 一键收缩所有节点
+  const expandAll = useCallback(() => {
+    setCollapsedNodes(new Set())
+  }, [])
+
+  const collapseAll = useCallback(() => {
+    const nodeMap = {}
+    stateRef.current.nodes.forEach(n => { nodeMap[n.id] = n })
+    const parentIds = new Set(
+      stateRef.current.edges
+        .map(e => e.from)
+        .filter(id => {
+          const t = nodeMap[id]?.type
+          return t === 'topEvent' || t === 'midEvent'
+        })
+    )
+    setCollapsedNodes(parentIds)
+  }, [])
+
   const [connectFrom, setConnectFrom] = useState(null)
   const connectFromRef = useRef(null)
   useEffect(() => { connectFromRef.current = connectFrom }, [connectFrom])
 
   const [tempLine, setTempLine] = useState(null)
-  const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const [ctxMenu, setCtxMenu] = useState(null)  // { x, y, type, targetId }
 
   const draggingNode = useRef(null)   // { nodeId, offsetX, offsetY }
@@ -362,20 +488,35 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
   const zoomIn  = useCallback(() => { const r = containerRef.current?.getBoundingClientRect(); if (r) applyZoom( ZOOM_STEP, r.width/2, r.height/2) }, [applyZoom])
   const zoomOut = useCallback(() => { const r = containerRef.current?.getBoundingClientRect(); if (r) applyZoom(-ZOOM_STEP, r.width/2, r.height/2) }, [applyZoom])
 
+  const hiddenNodeIdsRef = useRef(new Set())
+  const leftOffsetRef    = useRef(leftOffset)
+  const rightOffsetRef   = useRef(rightOffset)
+  useEffect(() => { leftOffsetRef.current  = leftOffset  }, [leftOffset])
+  useEffect(() => { rightOffsetRef.current = rightOffset }, [rightOffset])
+
   const fitToScreen = useCallback(() => {
     const s = stateRef.current
     if (!containerRef.current) return
-    if (s.nodes.length === 0) { setVt({ x: 40, y: 40, scale: 1 }); return }
-    const rect = containerRef.current.getBoundingClientRect()
-    const xs = s.nodes.flatMap(n => [n.x - n.width / 2, n.x + n.width / 2])
-    const ys = s.nodes.flatMap(n => [n.y, n.y + n.height])
+    // 仅用可见节点计算包围盒，并扣除左右侧边栏宽度，避免内容被遮挡
+    const visNodes = s.nodes.filter(n => !hiddenNodeIdsRef.current.has(n.id))
+    if (visNodes.length === 0) { setVt({ x: 40, y: 40, scale: 1 }); return }
+    const rect   = containerRef.current.getBoundingClientRect()
+    const lOff   = leftOffsetRef.current
+    const rOff   = rightOffsetRef.current
+    const usableW = rect.width - lOff - rOff
+    const xs = visNodes.flatMap(n => [n.x - n.width / 2, n.x + n.width / 2])
+    const ys = visNodes.flatMap(n => [n.y, n.y + n.height])
     const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]
-    const pad = 80
-    const sc = Math.min(MAX_SCALE, Math.max(MIN_SCALE,
-      Math.min((rect.width - pad * 2) / (maxX - minX || 1), (rect.height - pad * 2) / (maxY - minY || 1))
+    const pad = 60
+    const sc  = Math.min(MAX_SCALE, Math.max(MIN_SCALE,
+      Math.min((usableW - pad * 2) / (maxX - minX || 1), (rect.height - pad * 2) / (maxY - minY || 1))
     ))
-    setVt({ scale: sc, x: (rect.width - (minX + maxX) * sc) / 2, y: (rect.height - (minY + maxY) * sc) / 2 })
+    // 将内容居中在可用区域（左右侧边栏之间）
+    setVt({ scale: sc, x: lOff + (usableW - (minX + maxX) * sc) / 2, y: (rect.height - (minY + maxY) * sc) / 2 })
   }, [])
+
+  // 暴露 fitToScreen 给外部调用（排版后、初始加载后自动触发）
+  if (fitRef) fitRef.current = fitToScreen
 
   // ── Keyboard shortcuts ───────────────────────────────────────
   useEffect(() => {
@@ -506,14 +647,20 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
     if (m === 'select') { selectNode(node.id); return }
     if (m === 'pan') return
     if (m === 'connect') {
+      const startConnect = () => {
+        if (node.type === 'basicEvent') { message.warning('基本事件不能作为父节点（无子节点）'); return }
+        const defaultAnchor = stateRef.current.layoutType === 'horizontal' ? 'right' : 'bottom'
+        const anchor = defaultAnchor
+        const pt = getAnchorPoint(node, anchor)
+        setConnectFrom({ nodeId: node.id, anchor })
+        setTempLine({ x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y })
+      }
+
       const cf = connectFromRef.current
       if (!cf) {
-        // basicEvent cannot be a parent (it has no children in a fault tree)
-        if (node.type === 'basicEvent') { message.warning('基本事件不能作为父节点（无子节点）'); return }
-        setConnectFrom(node.id)
-        setTempLine({ x1: node.x, y1: node.y + node.height, x2: node.x, y2: node.y + node.height })
+        startConnect()
       } else {
-        if (cf === node.id) { setConnectFrom(null); setTempLine(null); return }
+        if (cf.nodeId === node.id) { setConnectFrom(null); setTempLine(null); return }
         // topEvent cannot be a child (it's always the root)
         if (node.type === 'topEvent') { message.warning('顶事件不能作为子节点'); return }
         // Cycle detection: check if 'cf' is already reachable from 'node' (would form a cycle)
@@ -522,17 +669,63 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
         const queue = [node.id]
         while (queue.length) {
           const cur = queue.shift()
-          if (cur === cf) { message.error('不能创建循环连线（会形成环路）'); return }
+          if (cur === cf.nodeId) { message.error('不能创建循环连线（会形成环路）'); return }
           if (visited.has(cur)) continue
           visited.add(cur)
           st.edges.filter(ed => ed.from === cur).forEach(ed => queue.push(ed.to))
         }
-        addEdge({ id: `e_${Date.now()}`, from: cf, to: node.id })
+        const fromNode = st.nodes.find(n => n.id === cf.nodeId)
+        const pick = selectAnchorsByLayout(fromNode, node, st.layoutType)
+        addEdge({ id: `e_${Date.now()}`, from: cf.nodeId, to: node.id, fromAnchor: cf.anchor, toAnchor: pick.toAnchor })
         setConnectFrom(null); setTempLine(null)
         message.success('连线创建成功')
       }
     }
   }, [selectNode, addEdge])
+
+  const handleNodeHandleClick = useCallback((nodeId, anchor) => {
+    if (modeRef.current !== 'connect') return
+    const st = stateRef.current
+    const node = st.nodes.find(n => n.id === nodeId)
+    if (!node) return
+
+    const cf = connectFromRef.current
+    if (!cf) {
+      if (node.type === 'basicEvent') { message.warning('基本事件不能作为父节点（无子节点）'); return }
+      const pt = getAnchorPoint(node, anchor)
+      setConnectFrom({ nodeId, anchor })
+      setTempLine({ x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y })
+      return
+    }
+
+    if (cf.nodeId === nodeId && cf.anchor === anchor) {
+      setConnectFrom(null)
+      setTempLine(null)
+      return
+    }
+
+    if (node.type === 'topEvent') { message.warning('顶事件不能作为子节点'); return }
+    const visited = new Set()
+    const queue = [nodeId]
+    while (queue.length) {
+      const cur = queue.shift()
+      if (cur === cf.nodeId) { message.error('不能创建循环连线（会形成环路）'); return }
+      if (visited.has(cur)) continue
+      visited.add(cur)
+      st.edges.filter(ed => ed.from === cur).forEach(ed => queue.push(ed.to))
+    }
+
+    addEdge({
+      id: `e_${Date.now()}`,
+      from: cf.nodeId,
+      to: nodeId,
+      fromAnchor: cf.anchor,
+      toAnchor: anchor,
+    })
+    setConnectFrom(null)
+    setTempLine(null)
+    message.success('连线创建成功')
+  }, [addEdge])
 
   // ── Context menu ─────────────────────────────────────────────
   const onContainerContextMenu = useCallback((e) => {
@@ -648,8 +841,12 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
         if (!rect) return
         const v = vtRef.current
         const pos = { x: (e.clientX - rect.left - v.x) / v.scale, y: (e.clientY - rect.top - v.y) / v.scale }
-        const fromNode = stateRef.current.nodes.find(n => n.id === connectFromRef.current)
-        if (fromNode) setTempLine({ x1: fromNode.x, y1: fromNode.y + fromNode.height, x2: pos.x, y2: pos.y })
+        const fromCfg = connectFromRef.current
+        const fromNode = stateRef.current.nodes.find(n => n.id === fromCfg.nodeId)
+        if (fromNode) {
+          const pt = getAnchorPoint(fromNode, fromCfg.anchor)
+          setTempLine({ x1: pt.x, y1: pt.y, x2: pos.x, y2: pos.y })
+        }
       }
     }
     function handleMouseUp(e) {
@@ -741,6 +938,9 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
     return hidden
   }, [childrenMap, collapsedNodes])
 
+  // 同步 ref，让 fitToScreen（useCallback 无依赖）始终能读到最新隐藏集合
+  hiddenNodeIdsRef.current = hiddenNodeIds
+
   const visibleNodes = useMemo(
     () => state.nodes.filter(n => !hiddenNodeIds.has(n.id)),
     [state.nodes, hiddenNodeIds]
@@ -800,18 +1000,6 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
             />
           )}
 
-          {mode === 'connect' && visibleNodes.map(node => (
-            <g key={`port-${node.id}`} style={{ pointerEvents: 'all' }}>
-              <circle cx={node.x} cy={node.y} r={5}
-                fill={hoveredNodeId === node.id ? '#1677ff' : '#fff'}
-                stroke="#1677ff" strokeWidth={2} style={{ cursor: 'crosshair' }}
-                onClick={e => { e.stopPropagation(); onNodeClick(node, e) }} />
-              <circle cx={node.x} cy={node.y + node.height} r={5}
-                fill={hoveredNodeId === node.id ? '#1677ff' : '#fff'}
-                stroke="#1677ff" strokeWidth={2} style={{ cursor: 'crosshair' }}
-                onClick={e => { e.stopPropagation(); onNodeClick(node, e) }} />
-            </g>
-          ))}
         </g>
       </svg>
 
@@ -825,14 +1013,13 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
             key={node.id} node={node}
             selected={state.selectedNodeId === node.id}
             multiSelected={state.selectedNodeIds.includes(node.id)}
-            isConnectFrom={connectFrom === node.id}
+            isConnectFrom={connectFrom?.nodeId === node.id}
             mode={mode}
             onMouseDown={onNodeMouseDown}
             onClick={onNodeClick}
             onContextMenu={onNodeContextMenu}
-            onMouseEnter={setHoveredNodeId}
-            onMouseLeave={() => setHoveredNodeId(null)}
             onDragStart={onNodeDragStart}
+            onHandleClick={handleNodeHandleClick}
             hasChildren={!!(childrenMap[node.id] && childrenMap[node.id].length > 0)}
             isCollapsed={collapsedNodes.has(node.id)}
             onToggleCollapse={toggleCollapse}
@@ -861,7 +1048,9 @@ export default function Canvas({ onSizeRef, rightOffset = 0 }) {
 
       {/* Bottom-right controls */}
       <CanvasControls mode={mode} setMode={setMode} scale={vt.scale}
-        onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={fitToScreen} rightOffset={rightOffset} />
+        onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={fitToScreen}
+        onExpandAll={expandAll} onCollapseAll={collapseAll}
+        rightOffset={rightOffset} />
 
       <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)}
         state={state} deleteEdge={deleteEdge} deleteNode={deleteNode}

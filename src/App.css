@@ -1,1 +1,22 @@
 ﻿/* App-level overrides */
+
+.kg-canvas-pan {
+	cursor: grab;
+}
+
+.kg-canvas-pan:active {
+	cursor: grabbing;
+}
+
+.kg-canvas-connect {
+	cursor: crosshair;
+}
+
+.kg-connect-active .react-flow__handle {
+	width: 12px !important;
+	height: 12px !important;
+	opacity: 1 !important;
+	background: #1677ff !important;
+	border: 2px solid #ffffff;
+	box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.25);
+}

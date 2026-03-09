@@ -99,11 +99,17 @@ function NodeIcon({ shape, color, bg, gateLabel }) {
   )
 }
 
-export default function NodePalette() {
+export default function NodePalette({ collapsed: controlledCollapsed, onCollapsedChange }) {
   const { deleteNode } = useEditorActions()
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false)
   const [dropTarget, setDropTarget] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsedInternal, setCollapsedInternal] = useState(false)
+  const collapsed = controlledCollapsed !== undefined ? controlledCollapsed : collapsedInternal
+  function toggleCollapsed() {
+    const next = !collapsed
+    setCollapsedInternal(next)
+    onCollapsedChange?.(next)
+  }
 
   // Listen for canvas node drag start/end events
   useEffect(() => {
@@ -147,7 +153,7 @@ export default function NodePalette() {
   return (
     <div
       className="absolute left-0 top-0 bottom-0 z-20 bg-white/70 backdrop-blur-sm border-r border-gray-200 flex flex-col transition-all duration-200"
-      style={{ width: collapsed ? 0 : 208 }}
+      style={{ width: collapsed ? 0 : 218 }}
       onDragOver={onPaletteDragOver}
       onDrop={onPaletteDrop}
       onDragLeave={onPaletteDragLeave}
@@ -155,7 +161,7 @@ export default function NodePalette() {
       {/* Floating toggle button — protrudes from right edge */}
       {!isDraggingCanvas && (
       <button
-        onClick={() => setCollapsed(c => !c)}
+        onClick={toggleCollapsed}
         title={collapsed ? '展开节点库' : '收起节点库'}
         style={{
           position: 'absolute',
