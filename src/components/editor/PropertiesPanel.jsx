@@ -2,7 +2,8 @@
 import { useEffect } from 'react'
 import { Form, Input, Select, Button, Alert, Empty, Divider, Tag, InputNumber, Tooltip } from 'antd'
 import { DeleteOutlined, SaveOutlined, RobotOutlined, DisconnectOutlined, InfoCircleOutlined } from '@ant-design/icons'
-import { useEditorStore, useEditorActions } from '../../store/useEditorStore'
+import { useEditorStore as _useRawStore, shallow } from '../../store/editorStore'
+import { useEditorActions } from '../../store/useEditorStore'
 
 const TYPE_OPTIONS = [
   { value: 'topEvent',   label: '顶事件' },
@@ -19,12 +20,14 @@ const GATE_TYPE_OPTIONS = [
 
 // ─── Edge panel ───────────────────────────────────────────────────
 function EdgePanel() {
-  const { state } = useEditorStore()
+  const selectedEdgeId = _useRawStore(s => s.selectedEdgeId)
+  const edges          = _useRawStore(s => s.edges, shallow)
+  const nodes          = _useRawStore(s => s.nodes, shallow)
   const { deleteEdge } = useEditorActions()
 
-  const edge = state.edges.find(e => e.id === state.selectedEdgeId)
-  const fromNode = edge ? state.nodes.find(n => n.id === edge.from) : null
-  const toNode   = edge ? state.nodes.find(n => n.id === edge.to)   : null
+  const edge = edges.find(e => e.id === selectedEdgeId)
+  const fromNode = edge ? nodes.find(n => n.id === edge.from) : null
+  const toNode   = edge ? nodes.find(n => n.id === edge.to)   : null
 
   if (!edge) return null
 
@@ -50,11 +53,13 @@ function EdgePanel() {
 
 // ─── Node panel ───────────────────────────────────────────────────
 function NodePanel() {
-  const { state } = useEditorStore()
+  const selectedNodeId = _useRawStore(s => s.selectedNodeId)
+  const nodes          = _useRawStore(s => s.nodes, shallow)
+  const aiIssues       = _useRawStore(s => s.aiIssues, shallow)
   const { updateNode, deleteNode } = useEditorActions()
   const [form] = Form.useForm()
 
-  const selected = state.nodes.find(n => n.id === state.selectedNodeId)
+  const selected = nodes.find(n => n.id === selectedNodeId)
 
   useEffect(() => {
     if (selected) form.setFieldsValue({
@@ -81,7 +86,7 @@ function NodePanel() {
     })
   }
 
-  const issuesForNode = state.aiIssues.filter(i => i.nodeId === selected.id)
+  const issuesForNode = aiIssues.filter(i => i.nodeId === selected.id)
 
   return (
     <>
@@ -233,13 +238,13 @@ function NodePanel() {
 
 // ─── Main panel ───────────────────────────────────────────────────
 export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
-  const { state } = useEditorStore()
+  const selectedNodeId = _useRawStore(s => s.selectedNodeId)
+  const selectedEdgeId = _useRawStore(s => s.selectedEdgeId)
+  const aiIssues       = _useRawStore(s => s.aiIssues, shallow)
   const setCollapsed = onCollapsedChange
 
-  const hasNode = !!state.selectedNodeId
-  const hasEdge = !!state.selectedEdgeId
-
-  const globalIssues = state.aiIssues.filter(i => i.nodeId === null) // eslint-disable-line no-unused-vars
+  const hasNode = !!selectedNodeId
+  const hasEdge = !!selectedEdgeId
 
   return (
     <div
@@ -292,7 +297,7 @@ export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
             )}
 
             {/* Global AI issues */}
-            {state.aiIssues.length > 0 && (
+            {aiIssues.length > 0 && (
               <>
                 <Divider style={{ margin: '12px 0' }}>
                   <span className="text-xs text-gray-500 flex items-center gap-1">
@@ -300,7 +305,7 @@ export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
                   </span>
                 </Divider>
                 <div className="space-y-2">
-                  {state.aiIssues.map((issue, i) => (
+                  {aiIssues.map((issue, i) => (
                     <div
                       key={i}
                       className={`text-xs p-2 rounded border flex items-start gap-1.5 ${

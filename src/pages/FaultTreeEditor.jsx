@@ -2,7 +2,8 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { message } from 'antd'
-import { EditorStoreProvider, useEditorStore, useEditorActions } from '../store/useEditorStore'
+import { EditorStoreProvider, useEditorActions } from '../store/useEditorStore'
+import { useEditorStore as _useRawStore, shallow } from '../store/editorStore'
 import Toolbar from '../components/editor/Toolbar'
 import NodePalette from '../components/editor/NodePalette'
 import Canvas from '../components/editor/Canvas'
@@ -15,14 +16,15 @@ import { getProject } from '../services/projectService'
 
 // ─── Inner editor (needs access to store) ────────────────────────
 function EditorInner({ projectId, projectName }) {
-  const { state } = useEditorStore()
+  const nodes = _useRawStore(s => s.nodes, shallow)
+  const edges = _useRawStore(s => s.edges, shallow)
   const { setGraph } = useEditorActions()
 
   // 为 AI 助手提供当前图数据上下文
   const getContext = useCallback(() => ({
-    nodes: state.nodes,
-    edges: state.edges,
-  }), [state.nodes, state.edges])
+    nodes,
+    edges,
+  }), [nodes, edges])
 
   const canvasWidthRef = useRef(null)
   // AI 助手引用：由工具栏按钮触发弹出
@@ -70,15 +72,15 @@ function EditorInner({ projectId, projectName }) {
   // ── 防抖自动保存（1.5 s）────────────────────────────────────
   useEffect(() => {
     if (!projectId || !initDoneRef.current) return
-    const snap = JSON.stringify({ nodes: state.nodes, edges: state.edges })
+    const snap = JSON.stringify({ nodes, edges })
     if (snap === lastSavedRef.current) return   // 无变更，跳过
 
     clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(async () => {
       try {
         const res = await saveFaultTreeGraph(projectId, {
-          nodes: state.nodes,
-          edges: state.edges,
+          nodes,
+          edges,
           revision: revisionRef.current,
         })
         if (res?.revision != null) revisionRef.current = res.revision
@@ -89,7 +91,7 @@ function EditorInner({ projectId, projectName }) {
     }, 1500)
 
     return () => clearTimeout(saveTimerRef.current)
-  }, [state.nodes, state.edges, projectId])
+  }, [nodes, edges, projectId])
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">

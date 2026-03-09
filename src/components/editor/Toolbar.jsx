@@ -10,7 +10,8 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { saveVersion } from '../../services/aiService'
 import UserAvatar from '../common/UserAvatar'
-import { useEditorStore, useEditorActions } from '../../store/useEditorStore'
+import { useEditorStore as _useRawStore } from '../../store/editorStore'
+import { useEditorActions } from '../../store/useEditorStore'
 import {
   computeLayout,
   computeHorizontalLayout,
@@ -116,15 +117,20 @@ function parseStandardFormat(json) {
 }
 
 export default function Toolbar({ projectName = '未命名项目', canvasWidth, aiAssistantRef, fitRef }) {
-  const { state } = useEditorStore()
+  // Fine-grained selectors: Toolbar only re-renders when these slices change
+  const nodes        = _useRawStore(s => s.nodes)
+  const edges        = _useRawStore(s => s.edges)
+  const historyIndex = _useRawStore(s => s.historyIndex)
+  const historyLen   = _useRawStore(s => s.history.length)
+  const state = { nodes, edges, historyIndex, history: { length: historyLen } }
   const { setGraph, setLayoutType, setAiIssues, undo, redo } = useEditorActions()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const fileInputRef = useRef(null)
   const [showAiImport, setShowAiImport] = useState(false)
 
-  const canUndo = state.historyIndex > 0
-  const canRedo = state.historyIndex < state.history.length - 1
+  const canUndo = historyIndex > 0
+  const canRedo = historyIndex < historyLen - 1
 
   function withLayoutAnchors(nodes, edges, layoutType) {
     const nodeMap = {}
@@ -132,9 +138,10 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth, 
     return edges.map(e => {
       const fromNode = nodeMap[e.from]
       const toNode = nodeMap[e.to]
-      if (!fromNode || !toNode) return e
+      // Always reset bend so re-laid-out edges render with the optimal clean curve
+      if (!fromNode || !toNode) return { ...e, bendX: 0, bendY: 0 }
       const pick = selectAnchorsByLayout(fromNode, toNode, layoutType)
-      return { ...e, fromAnchor: pick.fromAnchor, toAnchor: pick.toAnchor }
+      return { ...e, fromAnchor: pick.fromAnchor, toAnchor: pick.toAnchor, bendX: 0, bendY: 0 }
     })
   }
 

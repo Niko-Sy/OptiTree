@@ -6,7 +6,8 @@ import {
   ZoomInOutlined, ZoomOutOutlined, CompressOutlined,
   PlusSquareOutlined, MinusSquareOutlined,
 } from '@ant-design/icons'
-import { useEditorStore, useEditorActions } from '../../store/useEditorStore'
+import { useEditorStore as _useRawStore, useEditorActions, shallow } from '../../store/editorStore'
+import { useEditorStore } from '../../store/useEditorStore'
 import { GateSymbol, GATE_CONFIG } from './GateSymbol'
 import { selectAnchorsByLayout } from '../../utils/layoutAlgorithm'
 
@@ -50,7 +51,7 @@ function getCtrlOffset(anchor, dist = 80) {
 const FaultNode = memo(function FaultNode({
   node, selected, multiSelected, isConnectFrom, mode,
   onMouseDown, onClick, onContextMenu, onDragStart, onHandleClick,
-  hasChildren, isCollapsed, onToggleCollapse,
+  hasChildren, isCollapsed, onToggleCollapse, nodeRef,
 }) {
   const typeClass = {
     topEvent: 'top-event', midEvent: 'mid-event',
@@ -71,6 +72,7 @@ const FaultNode = memo(function FaultNode({
 
   return (
     <div
+      ref={nodeRef}
       className={`fault-node ${typeClass} ${selected ? 'selected' : ''}`}
       draggable
       style={{
@@ -184,34 +186,44 @@ const FaultNode = memo(function FaultNode({
   )
 })
 
-// ── Edge (SVG) ──────────────────────────────────────────────────
-const EdgePath = memo(function EdgePath({ edge, nodeMap, selected, onClick, onContextMenu, onMidMouseDown }) {
-  const p = nodeMap[edge.from]; const c = nodeMap[edge.to]
-  if (!p || !c) return null
+// ── Edge path string builder (pure function, reused for DOM direct-write) ──
+export function buildEdgePath(p, c, edge) {
   const fromAnchor = edge.fromAnchor || 'bottom'
-  const toAnchor = edge.toAnchor || 'top'
+  const toAnchor   = edge.toAnchor   || 'top'
   const start = getAnchorPoint(p, fromAnchor)
-  const end = getAnchorPoint(c, toAnchor)
+  const end   = getAnchorPoint(c, toAnchor)
   const sx = start.x, sy = start.y, ex = end.x, ey = end.y
-  const [fromDx, fromDy] = getCtrlOffset(fromAnchor)
-  const [toDx, toDy] = getCtrlOffset(toAnchor)
+  // Adaptive control-point distance: tight for close nodes, smooth for far ones
+  const dist = Math.min(160, Math.max(40, Math.hypot(ex - sx, ey - sy) * 0.42))
+  const [fromDx, fromDy] = getCtrlOffset(fromAnchor, dist)
+  const [toDx, toDy]     = getCtrlOffset(toAnchor, dist)
   const bx = edge.bendX || 0, by = edge.bendY || 0
   const cp1x = sx + fromDx + bx * 0.5, cp1y = sy + fromDy + by * 0.5
-  const cp2x = ex + toDx + bx * 0.5, cp2y = ey + toDy + by * 0.5
+  const cp2x = ex + toDx   + bx * 0.5, cp2y = ey + toDy   + by * 0.5
   const d = `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${ex} ${ey}`
-  // Approximate bezier midpoint at t=0.5
   const hmx = (sx + cp1x * 3 + cp2x * 3 + ex) / 8
   const hmy = (sy + cp1y * 3 + cp2y * 3 + ey) / 8
+  return { d, hmx, hmy }
+}
+
+// ── Edge (SVG) ──────────────────────────────────────────────────
+const EdgePath = memo(function EdgePath({ edge, nodeMap, selected, onClick, onContextMenu, onMidMouseDown, pathRef, circleRef }) {
+  const p = nodeMap[edge.from]; const c = nodeMap[edge.to]
+  if (!p || !c) return null
+  const { d, hmx, hmy } = buildEdgePath(p, c, edge)
+  const bx = edge.bendX || 0, by = edge.bendY || 0
   return (
     <g>
       <path d={d} stroke="transparent" strokeWidth={12} fill="none" pointerEvents="all"
         style={{ cursor: 'pointer' }}
         onClick={e => { e.stopPropagation(); onClick(edge.id) }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onContextMenu(e, edge.id) }} />
-      <path d={d} stroke={selected ? '#1677ff' : '#94a3b8'}
-        strokeWidth={selected ? 2.5 : 2} fill="none" pointerEvents="none" />
+      <path ref={pathRef} d={d} stroke={selected ? '#1677ff' : '#94a3b8'}
+        strokeWidth={selected ? 2.5 : 2} fill="none" pointerEvents="none"
+        markerEnd={selected ? 'url(#edge-arrow-sel)' : 'url(#edge-arrow)'} />
       {selected && (
         <circle
+          ref={circleRef}
           cx={hmx} cy={hmy} r={6}
           fill="#fff" stroke="#1677ff" strokeWidth={2}
           style={{ cursor: 'grab', pointerEvents: 'all' }}
@@ -365,9 +377,23 @@ function ContextMenu({ menu, onClose, state, deleteEdge, deleteNode, onCopy, onP
 
 // ── Main Canvas ─────────────────────────────────────────────────
 export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, fitRef }) {
-  const { state } = useEditorStore()
-  const { addNode, moveNode, commitMove, selectNode, selectEdge, deselect, addEdge, deleteEdge, deleteNode, undo, redo, updateEdge, selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes } = useEditorActions()
+  // Fine-grained Zustand selectors — each component only re-renders when its slice changes
+  const nodes            = _useRawStore(s => s.nodes, shallow)
+  const edges            = _useRawStore(s => s.edges, shallow)
+  const selectedNodeId   = _useRawStore(s => s.selectedNodeId)
+  const selectedEdgeId   = _useRawStore(s => s.selectedEdgeId)
+  const selectedNodeIds  = _useRawStore(s => s.selectedNodeIds, shallow)
+  const clipboard        = _useRawStore(s => s.clipboard)
+  const layoutType       = _useRawStore(s => s.layoutType)
+  // Build a state-like object so ContextMenu and other legacy consumers still work
+  const state = { nodes, edges, selectedNodeId, selectedEdgeId, selectedNodeIds, clipboard, layoutType }
+
+  const { addNode, moveNode, commitMove, selectNode, selectEdge, deselect, addEdge, deleteEdge, deleteNode, undo, redo, moveEdge, commitEdgeMove, updateEdge, selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes } = useEditorActions()
   const containerRef = useRef(null)
+
+  // ── DOM ref maps for direct-write during drag (zero React re-renders) ──
+  const nodeDomRefs = useRef(new Map())   // nodeId → HTMLDivElement
+  const edgePathRefs = useRef(new Map())  // edgeId → SVGPathElement
 
   const [vt, setVt] = useState({ x: 40, y: 40, scale: 1 })
   const vtRef = useRef(vt)
@@ -384,43 +410,41 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   // ── 首次加载图数据时，默认收缩所有有子节点的父节点 ────────
   useEffect(() => {
     if (collapsedInitRef.current) return
-    if (state.nodes.length === 0) return
-    const nodeMap = {}
-    state.nodes.forEach(n => { nodeMap[n.id] = n })
+    if (nodes.length === 0) return
+    const nm = {}; nodes.forEach(n => { nm[n.id] = n })
     const parentIds = new Set(
-      state.edges
+      edges
         .map(e => e.from)
         .filter(id => {
-          const t = nodeMap[id]?.type
+          const t = nm[id]?.type
           return t === 'topEvent' || t === 'midEvent'
         })
     )
     if (parentIds.size === 0) return
     collapsedInitRef.current = true
     setCollapsedNodes(parentIds)
-  }, [state.nodes, state.edges])
+  }, [nodes, edges])
 
   // 当图被整体替换（导入等操作）时重置收缩状态（节点数变化超过阈值视为整体替换）
   const prevNodeCountRef = useRef(0)
   useEffect(() => {
-    const cur = state.nodes.length
+    const cur = nodes.length
     const prev = prevNodeCountRef.current
     // Only re-collapse when it looks like a full graph replacement (not single add/remove)
     if (collapsedInitRef.current && Math.abs(cur - prev) > 3 && cur > 0) {
-      const nodeMap = {}
-      state.nodes.forEach(n => { nodeMap[n.id] = n })
+      const nm = {}; nodes.forEach(n => { nm[n.id] = n })
       const parentIds = new Set(
-        state.edges
+        edges
           .map(e => e.from)
           .filter(id => {
-            const t = nodeMap[id]?.type
+            const t = nm[id]?.type
             return t === 'topEvent' || t === 'midEvent'
           })
       )
       setCollapsedNodes(parentIds)
     }
     prevNodeCountRef.current = cur
-  }, [state.nodes.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nodes.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleCollapse = useCallback((nodeId) => {
     setCollapsedNodes(prev => {
@@ -437,13 +461,13 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   }, [])
 
   const collapseAll = useCallback(() => {
-    const nodeMap = {}
-    stateRef.current.nodes.forEach(n => { nodeMap[n.id] = n })
+    const nm = {}
+    stateRef.current.nodes.forEach(n => { nm[n.id] = n })
     const parentIds = new Set(
       stateRef.current.edges
         .map(e => e.from)
         .filter(id => {
-          const t = nodeMap[id]?.type
+          const t = nm[id]?.type
           return t === 'topEvent' || t === 'midEvent'
         })
     )
@@ -460,10 +484,14 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   const draggingNode = useRef(null)   // { nodeId, offsetX, offsetY }
   const draggingMulti = useRef(null)  // { ids, startX, startY, startPositions:{id:{x,y}} }
   const draggingEdgeMid = useRef(null) // { edgeId, startBx, startBy, startClientX, startClientY }
+  const dragEdgeBendRef = useRef(null)     // { edgeId, bendX, bendY } — transient, flushed to store on mouseup
+  const edgeCircleRefs = useRef(new Map()) // edgeId → SVGCircleElement (bend handle)
   const lassoRef = useRef(null)       // { startX, startY } in canvas coords
   const [lasso, setLasso] = useState(null) // { x1,y1,x2,y2 } canvas coords
   const panRef = useRef(null)
   const rightClickRef = useRef(null)  // { startTime, moved } — persists past mouseup for contextmenu check
+  // dragPosRef: transient node positions during drag, never triggers React render
+  const dragPosRef = useRef(new Map())  // nodeId → { x, y }
   const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state }, [state])
 
@@ -475,6 +503,29 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
     const v = vtRef.current
     return { x: (clientX - rect.left - v.x) / v.scale, y: (clientY - rect.top - v.y) / v.scale }
   }
+
+  // ── Update connected edges in DOM without React re-renders ───
+  const updateEdgesForNodesDom = useCallback((movedNodeIds) => {
+    const idSet = new Set(movedNodeIds)
+    const allEdges = stateRef.current.edges
+    const allNodes = stateRef.current.nodes
+    // Build a live node map that merges store positions with current drag positions
+    const liveNodeMap = {}
+    allNodes.forEach(n => { liveNodeMap[n.id] = n })
+    dragPosRef.current.forEach((pos, id) => {
+      if (liveNodeMap[id]) liveNodeMap[id] = { ...liveNodeMap[id], ...pos }
+    })
+    allEdges.forEach(edge => {
+      if (!idSet.has(edge.from) && !idSet.has(edge.to)) return
+      const pathEl = edgePathRefs.current.get(edge.id)
+      if (!pathEl) return
+      const p = liveNodeMap[edge.from]
+      const c = liveNodeMap[edge.to]
+      if (!p || !c) return
+      const { d } = buildEdgePath(p, c, edge)
+      pathEl.setAttribute('d', d)
+    })
+  }, [])
 
   // ── Zoom ────────────────────────────────────────────────────
   const applyZoom = useCallback((delta, px, py) => {
@@ -814,16 +865,31 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   // continues even when the cursor leaves the canvas boundary.
   useEffect(() => {
     function handleMouseMove(e) {
-      // Edge midpoint drag
+      // Edge midpoint drag — DOM direct-write, history pushed on mouseup
       if (draggingEdgeMid.current) {
         const { edgeId, startBx, startBy, startClientX, startClientY } = draggingEdgeMid.current
         const v = vtRef.current
         const dx = (e.clientX - startClientX) / v.scale
         const dy = (e.clientY - startClientY) / v.scale
-        updateEdge(edgeId, { bendX: startBx + dx, bendY: startBy + dy })
+        const bx = startBx + dx, by = startBy + dy
+        // Write directly to DOM — no Zustand update until mouseup
+        dragEdgeBendRef.current = { edgeId, bendX: bx, bendY: by }
+        const st = stateRef.current
+        const edge = st.edges.find(ed => ed.id === edgeId)
+        if (edge) {
+          const p = st.nodes.find(n => n.id === edge.from)
+          const c = st.nodes.find(n => n.id === edge.to)
+          if (p && c) {
+            const { d, hmx, hmy } = buildEdgePath(p, c, { ...edge, bendX: bx, bendY: by })
+            const pathEl = edgePathRefs.current.get(edgeId)
+            if (pathEl) pathEl.setAttribute('d', d)
+            const circleEl = edgeCircleRefs.current.get(edgeId)
+            if (circleEl) { circleEl.setAttribute('cx', hmx); circleEl.setAttribute('cy', hmy) }
+          }
+        }
         return
       }
-      // Multi-node drag
+      // Multi-node drag — DOM direct-write, zero React re-renders
       if (draggingMulti.current) {
         const { ids, startClientX, startClientY, startPositions } = draggingMulti.current
         const v = vtRef.current
@@ -835,26 +901,42 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
         }
         ids.forEach(id => {
           const sp = startPositions[id]
-          if (sp) moveNode(id, sp.x + dx, sp.y + dy)
+          if (!sp) return
+          const nx = sp.x + dx, ny = sp.y + dy
+          dragPosRef.current.set(id, { x: nx, y: ny })
+          const el = nodeDomRefs.current.get(id)
+          if (el) {
+            el.style.left = `${nx - (stateRef.current.nodes.find(n => n.id === id)?.width ?? 120) / 2}px`
+            el.style.top  = `${ny}px`
+          }
         })
+        updateEdgesForNodesDom(ids)
         return
       }
-      // Single-node drag
+      // Single-node drag — DOM direct-write, zero React re-renders
       if (draggingNode.current) {
         const rect = containerRef.current?.getBoundingClientRect()
         if (!rect) return
         const v = vtRef.current
         const pos = { x: (e.clientX - rect.left - v.x) / v.scale, y: (e.clientY - rect.top - v.y) / v.scale }
         const { nodeId, offsetX, offsetY } = draggingNode.current
+        const nx = pos.x - offsetX, ny = pos.y - offsetY
         if (!draggingNode.current.notifiedDragStart) {
-          const nx = pos.x - offsetX, ny = pos.y - offsetY
           const nd = stateRef.current.nodes.find(n => n.id === nodeId)
           if (nd && (Math.abs(nx - nd.x) > 3 || Math.abs(ny - nd.y) > 3)) {
             draggingNode.current.notifiedDragStart = true
             window.dispatchEvent(new CustomEvent('canvasNodeDragStart'))
           }
         }
-        moveNode(nodeId, pos.x - offsetX, pos.y - offsetY)
+        // Write directly to DOM — no React dispatch
+        dragPosRef.current.set(nodeId, { x: nx, y: ny })
+        const el = nodeDomRefs.current.get(nodeId)
+        if (el) {
+          const nd = stateRef.current.nodes.find(n => n.id === nodeId)
+          el.style.left = `${nx - (nd?.width ?? 120) / 2}px`
+          el.style.top  = `${ny}px`
+        }
+        updateEdgesForNodesDom([nodeId])
         return
       }
       if (panRef.current) {
@@ -864,8 +946,9 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
         if (panRef.current.fromRight && rightClickRef.current && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
           rightClickRef.current.moved = true
         }
-        const { tx, ty } = panRef.current  // captured before async setState
-        setVt(v => ({ ...v, x: tx + dx, y: ty + dy }))
+        const { tx, ty } = panRef.current
+        // DOM direct-write — no React setState, zero re-renders during pan
+        applyVtToDom(tx + dx, ty + dy, vtRef.current.scale)
         return
       }
       // Lasso update
@@ -892,12 +975,25 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
     function handleMouseUp(e) {
       if (draggingEdgeMid.current) {
         draggingEdgeMid.current = null
+        if (dragEdgeBendRef.current) {
+          const { edgeId, bendX, bendY } = dragEdgeBendRef.current
+          dragEdgeBendRef.current = null
+          moveEdge(edgeId, { bendX, bendY })
+          commitEdgeMove()
+        }
         panRef.current = null
         return
       }
       if (draggingMulti.current) {
+        // Flush dragged positions into store, then commit history
+        const { ids } = draggingMulti.current
         draggingMulti.current = null
-        commitMove()  // reuse COMMIT_MOVE to push history
+        ids.forEach(id => {
+          const pos = dragPosRef.current.get(id)
+          if (pos) moveNode(id, pos.x, pos.y)
+        })
+        dragPosRef.current.clear()
+        commitMove()
         window.dispatchEvent(new CustomEvent('canvasNodeDragEnd'))
         panRef.current = null
         return
@@ -907,13 +1003,22 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
         draggingNode.current = null
         // Drag-to-delete: if mouse released over NodePalette zone (left panel ~208px wide)
         if (e.clientX < 210) {
+          dragPosRef.current.delete(nodeId)
           deleteNode(nodeId)
         } else {
+          // Flush final position into store, then commit
+          const pos = dragPosRef.current.get(nodeId)
+          if (pos) moveNode(nodeId, pos.x, pos.y)
+          dragPosRef.current.delete(nodeId)
           commitMove()
         }
         window.dispatchEvent(new CustomEvent('canvasNodeDragEnd'))
         panRef.current = null
         return
+      }
+      // Sync pan final position into React state (one re-render)
+      if (panRef.current) {
+        setVt({ x: vtRef.current.x, y: vtRef.current.y, scale: vtRef.current.scale })
       }
       if (lassoRef.current) {
         const lr = lassoRef.current
@@ -946,20 +1051,21 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [moveNode, commitMove, updateEdge, deleteNode, selectNodes]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [moveNode, moveEdge, commitMove, commitEdgeMove, deleteNode, selectNodes, updateEdgesForNodesDom, applyVtToDom]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const nodeMap = {}
-  state.nodes.forEach(n => { nodeMap[n.id] = n })
+  const nodeMap = useMemo(() => {
+    const m = {}; nodes.forEach(n => { m[n.id] = n }); return m
+  }, [nodes])
 
   // Build children map (from→[to]) for hasChildren and hidden computation
   const childrenMap = useMemo(() => {
     const map = {}
-    state.edges.forEach(e => {
+    edges.forEach(e => {
       if (!map[e.from]) map[e.from] = []
       map[e.from].push(e.to)
     })
     return map
-  }, [state.edges])
+  }, [edges])
 
   // Compute hidden node IDs: all transitive descendants of collapsed nodes
   const hiddenNodeIds = useMemo(() => {
@@ -982,12 +1088,12 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   hiddenNodeIdsRef.current = hiddenNodeIds
 
   const visibleNodes = useMemo(
-    () => state.nodes.filter(n => !hiddenNodeIds.has(n.id)),
-    [state.nodes, hiddenNodeIds]
+    () => nodes.filter(n => !hiddenNodeIds.has(n.id)),
+    [nodes, hiddenNodeIds]
   )
   const visibleEdges = useMemo(
-    () => state.edges.filter(e => !hiddenNodeIds.has(e.from) && !hiddenNodeIds.has(e.to)),
-    [state.edges, hiddenNodeIds]
+    () => edges.filter(e => !hiddenNodeIds.has(e.from) && !hiddenNodeIds.has(e.to)),
+    [edges, hiddenNodeIds]
   )
 
   // Listen for multi-delete event from ContextMenu
@@ -1018,11 +1124,21 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
     >
       {/* SVG layer: edges + temp line + connection ports + lasso */}
       <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 5, overflow: 'visible', pointerEvents: 'none' }}>
+        <defs>
+          <marker id="edge-arrow" markerWidth="5" markerHeight="5" refX="5" refY="2.5" orient="auto" markerUnits="strokeWidth">
+            <polygon points="0 0, 5 2.5, 0 5" fill="#94a3b8" />
+          </marker>
+          <marker id="edge-arrow-sel" markerWidth="5" markerHeight="5" refX="5" refY="2.5" orient="auto" markerUnits="strokeWidth">
+            <polygon points="0 0, 5 2.5, 0 5" fill="#1677ff" />
+          </marker>
+        </defs>
         <g ref={svgGroupRef} style={{ transform: `translate(${vt.x}px,${vt.y}px) scale(${vt.scale})` }}>
           {visibleEdges.map(edge => (
             <EdgePath key={edge.id} edge={edge} nodeMap={nodeMap}
-              selected={state.selectedEdgeId === edge.id} onClick={selectEdge} onContextMenu={onEdgeContextMenu}
-              onMidMouseDown={onEdgeMidMouseDown} />
+              selected={selectedEdgeId === edge.id} onClick={selectEdge} onContextMenu={onEdgeContextMenu}
+              onMidMouseDown={onEdgeMidMouseDown}
+              pathRef={el => el ? edgePathRefs.current.set(edge.id, el) : edgePathRefs.current.delete(edge.id)}
+              circleRef={el => el ? edgeCircleRefs.current.set(edge.id, el) : edgeCircleRefs.current.delete(edge.id)} />
           ))}
 
           {tempLine && (
@@ -1052,8 +1168,8 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
         {visibleNodes.map(node => (
           <FaultNode
             key={node.id} node={node}
-            selected={state.selectedNodeId === node.id}
-            multiSelected={state.selectedNodeIds.includes(node.id)}
+            selected={selectedNodeId === node.id}
+            multiSelected={selectedNodeIds.includes(node.id)}
             isConnectFrom={connectFrom?.nodeId === node.id}
             mode={mode}
             onMouseDown={onNodeMouseDown}
@@ -1064,12 +1180,13 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
             hasChildren={!!(childrenMap[node.id] && childrenMap[node.id].length > 0)}
             isCollapsed={collapsedNodes.has(node.id)}
             onToggleCollapse={toggleCollapse}
+            nodeRef={el => el ? nodeDomRefs.current.set(node.id, el) : nodeDomRefs.current.delete(node.id)}
           />
         ))}
       </div>
 
       {/* Empty state */}
-      {state.nodes.length === 0 && (
+      {nodes.length === 0 && (
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none" style={{ zIndex: 2 }}>
           <svg width="52" height="52" viewBox="0 0 52 52" fill="none">
             <rect x="6" y="6" width="40" height="40" rx="10" stroke="#d1d5db" strokeWidth="2" fill="none" />
