@@ -4,7 +4,7 @@
  */
 
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
-import { post, get, tokenStore, ApiError } from '../services/apiClient'
+import { post, get, tokenStore, ApiError, onAuthExpired } from '../services/apiClient'
 
 // ─── Context ──────────────────────────────────────────────────────
 const AuthContext = createContext(null)
@@ -28,6 +28,22 @@ function persistUser(user) {
   }
 }
 
+function extractUser(data) {
+  return data?.user || data || null
+}
+
+function extractAccessToken(data) {
+  return data?.accessToken || data?.token || ''
+}
+
+function extractRefreshToken(data) {
+  return data?.refreshToken || ''
+}
+
+function extractAvatarUrl(data) {
+  return data?.avatarUrl || data?.avatar || data?.url || ''
+}
+
 // ─── Provider ─────────────────────────────────────────────────────
 export function AuthProvider({ children }) {
   // 初始从缓存恢复，等 fetchMe 完成后会用最新数据覆盖
@@ -42,8 +58,9 @@ export function AuthProvider({ children }) {
     }
     get('/api/v1/users/me')
       .then(data => {
-        setUser(data.user)
-        persistUser(data.user)
+        const nextUser = extractUser(data)
+        setUser(nextUser)
+        persistUser(nextUser)
       })
       .catch(() => {
         // token 已失效，清除本地缓存
@@ -53,15 +70,21 @@ export function AuthProvider({ children }) {
       })
   }, []) // eslint-disable-line
 
+  useEffect(() => onAuthExpired(() => {
+    persistUser(null)
+    setUser(null)
+    setError('登录状态已过期，请重新登录')
+  }), [])
+
   /** 登录 — POST /api/v1/auth/login */
   const login = useCallback(async ({ username, password, remember }) => {
     setLoading(true)
     setError(null)
     try {
       const data = await post('/api/v1/auth/login', { username, password, remember })
-      tokenStore.setAccess(data.accessToken)
-      tokenStore.setRefresh(data.refreshToken)
-      const u = data.user
+      tokenStore.setAccess(extractAccessToken(data))
+      tokenStore.setRefresh(extractRefreshToken(data))
+      const u = extractUser(data)
       persistUser(u)
       setUser(u)
       return u
@@ -109,9 +132,10 @@ export function AuthProvider({ children }) {
   /** 获取最新用户信息 — GET /api/v1/users/me */
   const fetchMe = useCallback(async () => {
     const data = await get('/api/v1/users/me')
-    setUser(data.user)
-    persistUser(data.user)
-    return data.user
+    const nextUser = extractUser(data)
+    setUser(nextUser)
+    persistUser(nextUser)
+    return nextUser
   }, [])
 
   /** 更新用户资料 — POST /api/v1/users/me/update */
@@ -119,7 +143,7 @@ export function AuthProvider({ children }) {
     setLoading(true)
     try {
       const data = await post('/api/v1/users/me/update', patch)
-      const u = data.user
+      const u = extractUser(data)
       persistUser(u)
       setUser(u)
       return u
@@ -135,13 +159,14 @@ export function AuthProvider({ children }) {
       const form = new FormData()
       form.append('avatar', file)
       const data = await post('/api/v1/users/me/avatar', form)
+      const avatarUrl = extractAvatarUrl(data)
       // 更新本地 user avatar
       setUser(prev => {
-        const u = { ...prev, avatar: data.avatarUrl }
+        const u = { ...prev, avatar: avatarUrl }
         persistUser(u)
         return u
       })
-      return data.avatarUrl
+      return avatarUrl
     } finally {
       setLoading(false)
     }

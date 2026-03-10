@@ -1,83 +1,79 @@
-/**
- * collaborationService.js — 版本管理与协作成员管理
- */
 import { get, post } from './apiClient'
 
-// ─── 版本管理 ──────────────────────────────────────────────────────
-
-/**
- * GET /api/v1/projects/{projectId}/versions
- * @param {string} projectId
- * @param {{ page?, pageSize? }} params
- */
-export async function listVersions(projectId, params = {}) {
-  return get(`/api/v1/projects/${projectId}/versions`, params)
+function normalizeListResponse(data) {
+  if (Array.isArray(data)) return { list: data }
+  if (Array.isArray(data?.list)) return data
+  if (Array.isArray(data?.items)) {
+    return { ...data, list: data.items }
+  }
+  return { ...data, list: [] }
 }
 
-/**
- * POST /api/v1/projects/{projectId}/versions
- * @param {string} projectId
- * @param {{ label?, snapshot }} body
- */
-export async function createVersion(projectId, body) {
-  return post(`/api/v1/projects/${projectId}/versions`, body)
+function normalizeVersion(version = {}) {
+  return {
+    ...version,
+    id: version.id || version.versionId || '',
+    label: version.label || version.name || '未命名版本',
+    createdAt: version.createdAt || version.created_at || new Date().toISOString(),
+  }
 }
 
-/**
- * GET /api/v1/projects/{projectId}/versions/{versionId}
- */
-export async function getVersion(projectId, versionId) {
-  return get(`/api/v1/projects/${projectId}/versions/${versionId}`)
+function normalizeMember(member = {}) {
+  const id = member.id || member.userId || member.memberId || ''
+  return {
+    ...member,
+    id,
+    userId: member.userId || id,
+    name: member.name || member.displayName || member.username || member.email || '',
+  }
 }
 
-/**
- * POST /api/v1/projects/{projectId}/versions/{versionId}/rollback
- * @param {string} projectId
- * @param {string} versionId
- * @param {{ saveCurrent? }} options
- */
-export async function rollbackVersion(projectId, versionId, options = {}) {
-  return post(`/api/v1/projects/${projectId}/versions/${versionId}/rollback`, options)
+function buildVersionLabel(label) {
+  if (label) return label
+  return `version ${new Date().toLocaleString('zh-CN', { hour12: false })}`
 }
 
-/**
- * POST /api/v1/projects/{projectId}/versions/{versionId}/delete
- */
-export async function deleteVersion(projectId, versionId) {
+export function listVersions(projectId) {
+  return get(`/api/v1/projects/${projectId}/versions`)
+    .then(normalizeListResponse)
+    .then((data) => ({
+      ...data,
+      list: data.list.map((item) => normalizeVersion(item)),
+    }))
+}
+
+export function createVersion(projectId, payload = {}) {
+  return post(`/api/v1/projects/${projectId}/versions`, {
+    ...payload,
+    label: buildVersionLabel(payload?.label),
+  }).then((data) => normalizeVersion(data?.version || data))
+}
+
+export function rollbackVersion(projectId, versionId, payload = {}) {
+  return post(`/api/v1/projects/${projectId}/versions/${versionId}/rollback`, payload)
+}
+
+export function deleteVersion(projectId, versionId) {
   return post(`/api/v1/projects/${projectId}/versions/${versionId}/delete`, {})
 }
 
-// ─── 协作成员管理 ──────────────────────────────────────────────────
-
-/**
- * GET /api/v1/projects/{projectId}/members
- */
-export async function listMembers(projectId) {
+export function listMembers(projectId) {
   return get(`/api/v1/projects/${projectId}/members`)
+    .then(normalizeListResponse)
+    .then((data) => ({
+      ...data,
+      list: data.list.map((item) => normalizeMember(item)),
+    }))
 }
 
-/**
- * POST /api/v1/projects/{projectId}/members/invite
- * @param {string} projectId
- * @param {{ email, role }} body
- */
-export async function inviteMember(projectId, body) {
-  return post(`/api/v1/projects/${projectId}/members/invite`, body)
+export function inviteMember(projectId, payload) {
+  return post(`/api/v1/projects/${projectId}/members/invite`, payload)
 }
 
-/**
- * POST /api/v1/projects/{projectId}/members/{memberId}/update-role
- * @param {string} projectId
- * @param {string} memberId
- * @param {{ role }} body
- */
-export async function updateMemberRole(projectId, memberId, body) {
-  return post(`/api/v1/projects/${projectId}/members/${memberId}/update-role`, body)
+export function updateMemberRole(projectId, memberId, payload) {
+  return post(`/api/v1/projects/${projectId}/members/${memberId}/update-role`, payload)
 }
 
-/**
- * POST /api/v1/projects/{projectId}/members/{memberId}/remove
- */
-export async function removeMember(projectId, memberId) {
+export function removeMember(projectId, memberId) {
   return post(`/api/v1/projects/${projectId}/members/${memberId}/remove`, {})
 }

@@ -309,8 +309,12 @@ export default function KgCanvas({ leftOffset = 208, rightOffset = 256, onRfInit
         onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
         onSelectionChange={handleSelectionChange}
-        onPaneClick={() => select([], null)}
-        onPaneDoubleClick={handlePaneDoubleClick}
+        onPaneClick={(e) => {
+          select([], null)
+          if (e?.detail === 2) {
+            handlePaneDoubleClick(e)
+          }
+        }}
         onInit={(inst) => { rfInstanceRef.current = inst; onRfInit?.(inst) }}
         fitView
         fitViewOptions={{ padding: 0.2 }}

@@ -1,5 +1,5 @@
 // 仪表盘页面，显示项目统计信息、项目列表和新建项目功能
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Input, Empty, Statistic, Row, Col, Divider, Dropdown, Tabs, message, Spin } from 'antd'
 import {
@@ -16,7 +16,20 @@ import {
   getDashboardSummary, listProjects, createProject, deleteProject,
 } from '../services/projectService'
 import { importFaultTree } from '../services/faultTreeService'
-import { importKnowledgeGraph } from '../services/knowledgeGraphService'
+import { createTaskWsManager } from '../services/wsTaskService'
+import { tokenStore } from '../services/apiClient'
+import { generateFaultTree, generateKnowledgeGraph } from '../services/aiService'
+
+const TASK_META_STORAGE_KEY = 'optitree_ai_task_meta'
+
+function loadTaskMetaCache() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TASK_META_STORAGE_KEY) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
 
 // ─── Template preset graphs ───────────────────────────────────────
 const TEMPLATES = {
@@ -81,6 +94,14 @@ export default function Dashboard() {
   const [showModal, setShowModal] = useState(false)
   const [showKgModal, setShowKgModal] = useState(false)
   const [docUploadTarget, setDocUploadTarget] = useState(null) // 'faultTree' | 'knowledge' | null
+  const [taskMetaByProject, setTaskMetaByProject] = useState(loadTaskMetaCache)
+  const [progressByProject, setProgressByProject] = useState({})
+  const [retryingProjectId, setRetryingProjectId] = useState('')
+  const wsManagersRef = useRef({})
+
+  useEffect(() => {
+    localStorage.setItem(TASK_META_STORAGE_KEY, JSON.stringify(taskMetaByProject))
+  }, [taskMetaByProject])
 
   // ─── 从 API 加载数据 ──────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -139,36 +160,158 @@ export default function Dashboard() {
   }
 
   // ─── 文档上传完成后（AI 生成，仍为 mock）────────────────────
+  function updateProjectProgress(projectId, payload) {
+    setProgressByProject(prev => ({
+      ...prev,
+      [projectId]: {
+        progress: payload.progress ?? prev[projectId]?.progress ?? 0,
+        stageLabel: payload.stageLabel ?? prev[projectId]?.stageLabel,
+      },
+    }))
+  }
+
+  const bindTaskWs = useCallback((projectId, taskId) => {
+    if (!projectId) return
+    if (wsManagersRef.current[projectId]) {
+      wsManagersRef.current[projectId].updateTask(taskId)
+      return
+    }
+
+    const ws = createTaskWsManager({
+      projectId,
+      taskId,
+      token: tokenStore.getAccess(),
+      onEvent: (event) => {
+        if (!event) return
+        if (event.event === 'task.pending' || event.event === 'task.progress') {
+          updateProjectProgress(projectId, event)
+          // 仅在 taskId 实际变化时更新，避免每次进度事件都触发 taskMetaByProject 状态更新
+          if (event.taskId) {
+            setTaskMetaByProject(prev => {
+              if (prev[projectId]?.taskId === event.taskId) return prev
+              return {
+                ...prev,
+                [projectId]: {
+                  ...prev[projectId],
+                  taskId: event.taskId,
+                  projectId,
+                },
+              }
+            })
+          }
+        }
+        if (event.event === 'task.completed') {
+          updateProjectProgress(projectId, { progress: 100, stageLabel: '已完成' })
+          setTaskMetaByProject(prev => {
+            const next = { ...prev }
+            delete next[projectId]
+            return next
+          })
+          loadData()
+          ws.disconnect()
+          delete wsManagersRef.current[projectId]
+        }
+        if (event.event === 'task.failed' || event.event === 'task.cancelled') {
+          loadData()
+          ws.disconnect()
+          delete wsManagersRef.current[projectId]
+        }
+      },
+    })
+
+    wsManagersRef.current[projectId] = ws
+    ws.connect()
+  }, [loadData])
+
   async function handleDocUploadComplete(result) {
     setDocUploadTarget(null)
     try {
-      if (result?.projectId || (result?.nodes && result?.edges)) {
-        // AI 生成故障树 → 在后端创建项目并导入数据
-        const data = await createProject({ name: '（AI 生成）故障树', type: 'ft', tags: ['AI生成'] })
-        const { project } = data
-        await importFaultTree({
-          projectId: project.id,
-          nodes: (result.nodes ?? []).map(n => ({ ...n, width: n.width ?? 120, height: n.height ?? 60 })),
-          edges: result.edges ?? [],
-        })
+      if (result?.projectId && result?.taskId) {
+        setTaskMetaByProject(prev => ({
+          ...prev,
+          [result.projectId]: {
+            projectId: result.projectId,
+            taskId: result.taskId,
+            target: result.target,
+            retryPayload: result.retryPayload,
+            updatedAt: Date.now(),
+          },
+        }))
+        updateProjectProgress(result.projectId, { progress: 1, stageLabel: '任务已创建' })
         await loadData()
-        navigate(`/editor?id=${project.id}`)
-      } else if (result?.kgId || result?.nodes) {
-        // AI 生成知识图谱 → 在后端创建项目并导入数据
-        const data = await createProject({ name: '（AI 生成）知识图谱', type: 'kg', tags: ['AI生成'] })
-        const { project } = data
-        await importKnowledgeGraph({
-          projectId: project.id,
-          rfNodes: result.nodes ?? [],
-          rfEdges: result.edges ?? [],
-        })
-        await loadData()
-        navigate(`/knowledge?id=${project.id}`)
+        bindTaskWs(result.projectId, result.taskId)
+        message.success('已创建 AI 生成任务，项目卡片将实时更新进度')
       }
     } catch (err) {
       message.error(err?.message || '导入失败')
     }
   }
+
+  async function handleRetryGenerate(project) {
+    const meta = taskMetaByProject[project.id]
+    const payload = meta?.retryPayload
+    if (!payload) {
+      message.warning('缺少重试参数，请重新上传文档发起生成')
+      return
+    }
+
+    setRetryingProjectId(project.id)
+    try {
+      let data
+      if (payload.type === 'kg') {
+        data = await generateKnowledgeGraph(payload.docIds, payload.config, project.id)
+      } else {
+        data = await generateFaultTree(payload.docIds, payload.topEvent, payload.config, project.id)
+      }
+
+      setTaskMetaByProject(prev => ({
+        ...prev,
+        [project.id]: {
+          ...prev[project.id],
+          projectId: project.id,
+          taskId: data.taskId,
+          updatedAt: Date.now(),
+        },
+      }))
+      updateProjectProgress(project.id, { progress: 1, stageLabel: '重试任务已创建' })
+      bindTaskWs(project.id, data.taskId)
+      await loadData()
+      message.success('已重新发起生成任务')
+    } catch (err) {
+      message.error(err?.message || '重试失败')
+    } finally {
+      setRetryingProjectId('')
+    }
+  }
+
+  useEffect(() => {
+    const allProjects = [...projects, ...kgList]
+    const activeProjects = new Set(allProjects.map((project) => project.id))
+
+    // 移除不存在项目的历史任务缓存
+    setTaskMetaByProject(prev => {
+      const next = {}
+      let changed = false
+      Object.entries(prev).forEach(([projectId, meta]) => {
+        if (!activeProjects.has(projectId)) {
+          changed = true
+          return
+        }
+        next[projectId] = meta
+      })
+      return changed ? next : prev
+    })
+
+    allProjects.forEach((project) => {
+      if (!['pending_generating', 'generating'].includes(project.generation_status)) return
+      bindTaskWs(project.id, taskMetaByProject[project.id]?.taskId)
+    })
+  }, [projects, kgList, taskMetaByProject, bindTaskWs])
+
+  useEffect(() => () => {
+    Object.values(wsManagersRef.current).forEach((ws) => ws.disconnect())
+    wsManagersRef.current = {}
+  }, [])
 
   // ─── 删除 ──────────────────────────────────────────────────────
   async function handleDeleteProject(id) {
@@ -324,8 +467,11 @@ export default function Dashboard() {
               children: (
                 <ProjectGrid
                   items={ftFiltered}
+                  progressByProject={progressByProject}
+                  retryingProjectId={retryingProjectId}
                   search={search}
                   onDelete={handleDeleteProject}
+                  onRetry={handleRetryGenerate}
                   onNew={() => setShowModal(true)}
                   emptyText="还没有故障树项目"
                   newLabel="新建故障树"
@@ -338,8 +484,11 @@ export default function Dashboard() {
               children: (
                 <ProjectGrid
                   items={kgFiltered}
+                  progressByProject={progressByProject}
+                  retryingProjectId={retryingProjectId}
                   search={search}
                   onDelete={handleDeleteKg}
+                  onRetry={handleRetryGenerate}
                   onNew={() => setShowKgModal(true)}
                   emptyText="还没有知识图谱"
                   newLabel="新建知识图谱"
@@ -377,7 +526,7 @@ export default function Dashboard() {
 }
 
 // ─── 通用项目网格组件 ─────────────────────────────────────────────
-function ProjectGrid({ items, search, onDelete, onNew, emptyText, newLabel, newColor = 'blue' }) {
+function ProjectGrid({ items, progressByProject, retryingProjectId, search, onDelete, onRetry, onNew, emptyText, newLabel, newColor = 'blue' }) {
   const hoverCls = newColor === 'purple'
     ? 'hover:border-purple-400 hover:bg-purple-50 hover:text-purple-500'
     : 'hover:border-blue-400 hover:bg-blue-50 hover:text-blue-500'
@@ -386,7 +535,14 @@ function ProjectGrid({ items, search, onDelete, onNew, emptyText, newLabel, newC
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
         {items.map(p => (
-          <ProjectCard key={p.id} project={p} onDelete={onDelete} />
+          <ProjectCard
+            key={p.id}
+            project={p}
+            onDelete={onDelete}
+            taskProgress={progressByProject?.[p.id]?.progress}
+            onRetry={onRetry}
+            retryLoading={retryingProjectId === p.id}
+          />
         ))}
         <div
           onClick={onNew}

@@ -6,7 +6,7 @@
  *   onComplete(result) — 生成完成回调，result: { projectId?, kgId? }
  *   onCancel — 取消回调
  */
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   Modal, Upload, Form, Input, Select, Slider, Steps,
   Button, Alert, Progress, Typography, Space, message,
@@ -15,7 +15,7 @@ import {
   InboxOutlined, FileTextOutlined, ThunderboltOutlined,
   CheckCircleOutlined, LoadingOutlined,
 } from '@ant-design/icons'
-import { uploadDocuments, generateFaultTree, generateKnowledgeGraph } from '../../services/aiService'
+import { uploadDocuments, generateFaultTree, generateKnowledgeGraph, getAiModels } from '../../services/aiService'
 
 const { Dragger } = Upload
 const { Text } = Typography
@@ -23,8 +23,7 @@ const { Text } = Typography
 const QUALITY_MARKS = { 1: '快速', 2: '平衡', 3: '精细' }
 const QUALITY_MAP = { 1: 'fast', 2: 'balanced', 3: 'precise' }
 
-// TODO: 从后端获取可用模型列表
-const MODEL_OPTIONS = [
+const DEFAULT_MODEL_OPTIONS = [
   { value: 'qwen-plus', label: '通义千问-Plus（推荐）' },
   { value: 'qwen-turbo', label: '通义千问-Turbo（快速）' },
   { value: 'deepseek-v3', label: 'DeepSeek-V3' },
@@ -33,14 +32,14 @@ const MODEL_OPTIONS = [
 
 const STEP_CONFIG = {
   faultTree: [
-    { title: '文档解析', description: '提取故障知识' },
-    { title: 'AI 生成', description: '构建故障树结构' },
-    { title: '完成', description: '已就绪' },
+    { title: '文档上传', description: '上传文档至服务器' },
+    { title: '提交任务', description: '创建后台 AI 生成任务' },
+    { title: '任务已创建', description: '后台异步生成中' },
   ],
   knowledge: [
-    { title: '文档解析', description: '提取实体与关系' },
-    { title: 'AI 构建', description: '生成知识图谱' },
-    { title: '完成', description: '已就绪' },
+    { title: '文档上传', description: '上传文档至服务器' },
+    { title: '提交任务', description: '创建后台 AI 生成任务' },
+    { title: '任务已创建', description: '后台异步生成中' },
   ],
 }
 
@@ -52,11 +51,27 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
+  const [modelOptions, setModelOptions] = useState(DEFAULT_MODEL_OPTIONS)
   const progressTimer = useRef(null)
+
+  // 组件卸载时清除可能仍在运行的进度模拟定时器
+  useEffect(() => () => clearInterval(progressTimer.current), [])
 
   const isFaultTree = target === 'faultTree'
   const title = isFaultTree ? '📤 文档 → 故障树（AI 生成）' : '🗺️ 文档 → 知识图谱（AI 生成）'
   const steps = STEP_CONFIG[target]
+
+  useEffect(() => {
+    if (!open) return
+    getAiModels()
+      .then((list) => {
+        if (!Array.isArray(list) || list.length === 0) return
+        setModelOptions(list)
+      })
+      .catch(() => {
+        setModelOptions(DEFAULT_MODEL_OPTIONS)
+      })
+  }, [open])
 
   function resetState() {
     setStep(-1)
@@ -103,30 +118,39 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
       // ── Step 0: 文档上传/解析 ──────────────────────────────
       setStep(0)
       setProgress(0)
-      simulateProgress(0, 45, 800, null)
+      simulateProgress(0, 35, 500, null)
 
       const files = fileList.map(f => f.originFileObj ?? f)
       const { docIds } = await uploadDocuments(files, { quality, model })
 
-      simulateProgress(45, 80, 400, null)
+      simulateProgress(35, 70, 350, null)
 
       // ── Step 1: AI 生成 ────────────────────────────────────
       setStep(1)
 
       let genResult
+      let retryPayload
       if (isFaultTree) {
+        retryPayload = { docIds, topEvent: values.topEvent, config: { quality, model }, type: 'ft' }
         genResult = await generateFaultTree(docIds, values.topEvent, { quality, model })
       } else {
+        retryPayload = { docIds, config: { quality, model }, type: 'kg' }
         genResult = await generateKnowledgeGraph(docIds, { quality, model })
       }
 
-      simulateProgress(80, 100, 300, null)
+      simulateProgress(70, 100, 300, null)
       setProgress(100)
 
-      // ── Step 2: 完成 ───────────────────────────────────────
+      // ── Step 2: 已提交后台任务 ───────────────────────────────
       setStep(2)
       setStepStatus('finish')
-      setResult(genResult)
+      setResult({
+        target,
+        projectId: genResult?.projectId,
+        taskId: genResult?.taskId,
+        status: genResult?.status,
+        retryPayload,
+      })
 
     } catch (err) {
       setStepStatus('error')
@@ -195,7 +219,7 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
           </Form.Item>
 
           <Form.Item name="model" label="AI 模型" initialValue="qwen-plus">
-            <Select options={MODEL_OPTIONS} />
+            <Select options={modelOptions} />
           </Form.Item>
 
           <div className="flex justify-end gap-2 mt-2">
@@ -252,24 +276,14 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
             <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
               <Space direction="vertical" className="w-full">
                 <Text className="text-green-700 font-medium flex items-center gap-1">
-                  <CheckCircleOutlined /> 生成成功
+                  <CheckCircleOutlined /> 任务已提交，后台生成中
                 </Text>
-                {isFaultTree && (
-                  <>
-                    <Text className="text-gray-600 text-sm">
-                      已生成 {result.nodes?.length ?? 0} 个节点 · {result.edges?.length ?? 0} 条连线
-                    </Text>
-                    <Text className="text-gray-500 text-xs">
-                      结构准确率：{((result.accuracy ?? 0) * 100).toFixed(0)}%
-                      {/* TODO: accuracy 来自后端评估 */}
-                    </Text>
-                  </>
-                )}
-                {!isFaultTree && (
-                  <Text className="text-gray-600 text-sm">
-                    已提取 {result.entityCount ?? 0} 个实体 · {result.relationCount ?? 0} 条关系
-                  </Text>
-                )}
+                <Text className="text-gray-600 text-sm">
+                  任务 ID：{result.taskId}
+                </Text>
+                <Text className="text-gray-500 text-xs">
+                  项目 ID：{result.projectId}，AI 正在后台处理，请在项目卡片中查看实时进度。
+                </Text>
               </Space>
             </div>
           )}
@@ -282,7 +296,7 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
               <>
                 <Button onClick={handleClose}>关闭</Button>
                 <Button type="primary" onClick={handleNavigate}>
-                  {isFaultTree ? '打开故障树编辑器' : '打开知识图谱'}
+                  返回项目列表
                 </Button>
               </>
             )}

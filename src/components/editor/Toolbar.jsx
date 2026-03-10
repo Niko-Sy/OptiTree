@@ -229,6 +229,12 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth, 
 
   // ── AI Import complete ───────────────────────────────────────
   function handleAiImportComplete(result) {
+    if (result?.projectId && result?.taskId) {
+      setShowAiImport(false)
+      message.success('AI 任务已提交，请在仪表盘项目卡片中查看生成进度')
+      navigate('/dashboard')
+      return
+    }
     const nodes = (result?.nodes ?? []).map(n => ({ width: 120, height: 60, ...n }))
     const edges = result?.edges ?? []
     if (!nodes.length) { message.warning('AI 生成结果为空'); return }

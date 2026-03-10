@@ -1,7 +1,7 @@
 // 故障树编辑器页面，包含画布、工具栏、属性面板等组件，并处理项目数据的加载和保存
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { message } from 'antd'
+import { useSearchParams, useNavigate } from 'react-router-dom'
+import { message, Spin } from 'antd'
 import { EditorStoreProvider, useEditorActions } from '../store/useEditorStore'
 import { useEditorStore as _useRawStore, shallow } from '../store/editorStore'
 import Toolbar from '../components/editor/Toolbar'
@@ -114,16 +114,42 @@ function EditorInner({ projectId, projectName }) {
 
 // ─── Page wrapper ─────────────────────────────────────────────────
 export default function FaultTreeEditor() {
+  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const projectId = searchParams.get('id')
   const [projectName, setProjectName] = useState('未命名项目')
+  const [accessReady, setAccessReady] = useState(false)
 
   useEffect(() => {
-    if (!projectId) return
+    if (!projectId) {
+      message.warning('缺少项目 ID')
+      navigate('/dashboard')
+      return
+    }
     getProject(projectId)
-      .then(({ project }) => setProjectName(project?.name || '未命名项目'))
-      .catch(() => {})
-  }, [projectId])
+      .then(({ project }) => {
+        const status = project?.generation_status || 'completed'
+        if (status !== 'completed') {
+          message.warning('项目仍在生成中，暂不可进入编辑器')
+          navigate('/dashboard')
+          return
+        }
+        setProjectName(project?.name || '未命名项目')
+        setAccessReady(true)
+      })
+      .catch(() => {
+        message.error('项目不存在或无访问权限')
+        navigate('/dashboard')
+      })
+  }, [projectId, navigate])
+
+  if (!accessReady) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-50">
+        <Spin tip="加载项目中..." />
+      </div>
+    )
+  }
 
   return (
     <EditorStoreProvider>

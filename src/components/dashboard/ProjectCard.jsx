@@ -1,5 +1,5 @@
 // 项目卡片组件，支持故障树项目和知识图谱项目两种类型
-import { Card, Button, Tag, Popconfirm, Tooltip } from 'antd'
+import { Card, Button, Tag, Popconfirm, Tooltip, Progress } from 'antd'
 import {
   FolderOpenOutlined, DeleteOutlined, ClockCircleOutlined,
   ApartmentOutlined, NodeIndexOutlined, TeamOutlined,
@@ -8,12 +8,26 @@ import {
 import { useNavigate } from 'react-router-dom'
 
 /** project.type === 'kg' 时渲染知识图谱卡片，否则渲染故障树卡片 */
-export default function ProjectCard({ project, onDelete }) {
+const GENERATING_STATUSES = new Set(['pending_generating', 'generating'])
+
+function getStatusMeta(status) {
+  if (status === 'pending_generating') return { color: 'gold', label: '排队中' }
+  if (status === 'generating') return { color: 'processing', label: '生成中' }
+  if (status === 'failed') return { color: 'error', label: '生成失败' }
+  return { color: 'success', label: '已完成' }
+}
+
+export default function ProjectCard({ project, onDelete, taskProgress, onRetry, retryLoading = false }) {
   const navigate = useNavigate()
   const isKg = project.type === 'kg'
+  const generationStatus = project.generation_status || 'completed'
+  const isGenerating = GENERATING_STATUSES.has(generationStatus)
+  const isFailed = generationStatus === 'failed'
+  const statusMeta = getStatusMeta(generationStatus)
 
   function handleOpen(e) {
     e?.stopPropagation()
+    if (isGenerating || isFailed) return
     if (isKg) navigate(`/knowledge?id=${project.id}`)
     else navigate(`/editor?id=${project.id}`)
   }
@@ -21,6 +35,11 @@ export default function ProjectCard({ project, onDelete }) {
   function handleCollaboration(e) {
     e.stopPropagation()
     navigate(`/collaboration?id=${project.id}&type=${isKg ? 'kg' : 'ft'}`)
+  }
+
+  function handleRetry(e) {
+    e.stopPropagation()
+    onRetry?.(project)
   }
 
   const date = new Date(project.createdAt).toLocaleDateString('zh-CN', {
@@ -33,7 +52,7 @@ export default function ProjectCard({ project, onDelete }) {
 
   return (
     <Card
-      className="fade-in-up hover:shadow-md transition-shadow cursor-pointer"
+      className={`fade-in-up hover:shadow-md transition-shadow ${isGenerating || isFailed ? 'cursor-not-allowed' : 'cursor-pointer'}`}
       styles={{ body: { padding: '16px' } }}
       onClick={handleOpen}
     >
@@ -49,6 +68,7 @@ export default function ProjectCard({ project, onDelete }) {
                 <Tag color="purple" className="text-xs shrink-0">知识图谱</Tag>
               )}
               {!isKg && (<Tag color="blue" className="text-xs shrink-0">故障树</Tag>)}
+              <Tag color={statusMeta.color} className="text-xs shrink-0">{statusMeta.label}</Tag>
             </div>
             <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
               <ClockCircleOutlined />
@@ -111,6 +131,26 @@ export default function ProjectCard({ project, onDelete }) {
         ))}
       </div>
 
+      {isGenerating && (
+        <div className="mt-3">
+          <Progress
+            percent={Math.max(0, Math.min(100, Math.round(taskProgress ?? 0)))}
+            status="active"
+            size="small"
+            strokeColor={{ from: '#1677ff', to: '#52c41a' }}
+          />
+        </div>
+      )}
+
+      {isFailed && (
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <p className="text-xs text-red-500">生成失败，可使用原参数重试。</p>
+          <Button size="small" type="primary" danger ghost onClick={handleRetry} loading={retryLoading}>
+            一键重试
+          </Button>
+        </div>
+      )}
+
       <div className="mt-3 flex gap-2">
         <Button
           type="primary"
@@ -119,9 +159,10 @@ export default function ProjectCard({ project, onDelete }) {
           className="flex-1"
           size="small"
           onClick={handleOpen}
+          disabled={isGenerating || isFailed}
           style={isKg ? { borderColor: '#722ed1', color: '#722ed1' } : {}}
         >
-          {isKg ? '打开知识图谱' : '打开编辑器'}
+          {isGenerating ? '生成中...' : isFailed ? '生成失败' : (isKg ? '打开知识图谱' : '打开编辑器')}
         </Button>
         <Tooltip title="协作与版本管理">
           <Button

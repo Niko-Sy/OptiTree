@@ -1,40 +1,39 @@
-/**
- * projectService.js — 仪表盘与项目管理
- */
 import { get, post } from './apiClient'
 
-/** GET /api/v1/dashboard/summary */
-export async function getDashboardSummary() {
-  return get('/api/v1/dashboard/summary')
+function normalizeListResponse(data) {
+  if (Array.isArray(data)) return { list: data }
+  if (Array.isArray(data?.list)) return data
+  if (Array.isArray(data?.items)) {
+    return { ...data, list: data.items }
+  }
+  return { ...data, list: [] }
 }
 
-/**
- * GET /api/v1/projects
- * @param {{ type?, keyword?, page?, pageSize?, sortBy?, sortOrder? }} params
- */
-export async function listProjects(params = {}) {
-  return get('/api/v1/projects', params)
+function normalizeProjectResponse(data) {
+  const project = data?.project || data
+  return { ...data, project }
 }
 
-/**
- * POST /api/v1/projects
- * @param {{ name, type, description?, tags? }} body
- */
-export async function createProject(body) {
-  return post('/api/v1/projects', body)
+function normalizeSummaryResponse(data) {
+  return data?.summary || data || {}
 }
 
-/** GET /api/v1/projects/{projectId} */
-export async function getProject(projectId) {
-  return get(`/api/v1/projects/${projectId}`)
+export function getDashboardSummary() {
+  return get('/api/v1/dashboard/summary').then(normalizeSummaryResponse)
 }
 
-/** POST /api/v1/projects/{projectId}/update */
-export async function updateProject(projectId, body) {
-  return post(`/api/v1/projects/${projectId}/update`, body)
+export function listProjects(params = {}) {
+  return get('/api/v1/projects', params).then(normalizeListResponse)
 }
 
-/** POST /api/v1/projects/{projectId}/delete */
-export async function deleteProject(projectId) {
+export function createProject(payload) {
+  return post('/api/v1/projects', payload).then(normalizeProjectResponse)
+}
+
+export function getProject(projectId) {
+  return get(`/api/v1/projects/${projectId}`).then(normalizeProjectResponse)
+}
+
+export function deleteProject(projectId) {
   return post(`/api/v1/projects/${projectId}/delete`, {})
 }

@@ -87,10 +87,19 @@ export default function Collaboration() {
 
   useEffect(() => { loadVersions() }, [loadVersions])
 
+  async function loadCurrentSnapshot() {
+    const blob = isKg
+      ? await exportKnowledgeGraph(projectId)
+      : await exportFaultTree(projectId)
+    const text = await blob.text()
+    return JSON.parse(text)
+  }
+
   async function handleSaveVersion() {
     if (!projectId) return
     try {
-      const ver = await createVersion(projectId, { description: '' })
+      const snapshot = await loadCurrentSnapshot()
+      const ver = await createVersion(projectId, { snapshot })
       message.success(`版本 ${ver.label ?? ver.id} 已保存`)
       loadVersions()
     } catch (err) {

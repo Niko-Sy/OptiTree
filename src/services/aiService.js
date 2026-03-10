@@ -1,259 +1,126 @@
-/**
- * aiService.js — AI 能力封装层
- *
- * 已接入后端：
- *   - uploadDocuments  → POST /api/v1/documents/upload
- *   - validateGraph    → POST /api/v1/fault-trees/{id}/validate 或 knowledge-graphs/{id}/validate
- *
- * 仍为 mock（后端未实现）：
- *   - generateFaultTree
- *   - generateKnowledgeGraph
- *   - chatWithAI
- *
- * 废弃（迁移至 collaborationService）：
- *   - listVersions  → collaborationService.listVersions
- *   - saveVersion   → collaborationService.createVersion
- */
-import { post } from './apiClient'
-import { validateFaultTree as apiFtValidate } from './faultTreeService'
-import { validateKnowledgeGraph as apiKgValidate } from './knowledgeGraphService'
-import { listVersions as colListVersions, createVersion as colCreateVersion } from './collaborationService'
+import { get, post, postStream, ApiError } from './apiClient'
+import { createVersion } from './collaborationService'
 
-/** 模拟网络延迟 */
-const delay = (ms) => new Promise((r) => setTimeout(r, ms))
+const QUICK_QUESTIONS = {
+  faultTree: [
+    { id: 'ft-1', label: '关键薄弱点', question: '这个故障树的关键薄弱点在哪里？' },
+    { id: 'ft-2', label: '降低故障率', question: '如何降低顶事件发生概率？' },
+    { id: 'ft-3', label: '检查中间事件', question: '是否存在冗余或缺失的中间事件？' },
+  ],
+  knowledgeGraph: [
+    { id: 'kg-1', label: '核心实体', question: '当前知识图谱的核心实体有哪些？' },
+    { id: 'kg-2', label: '关系检查', question: '哪些关系可能存在冲突或缺失？' },
+    { id: 'kg-3', label: '数据建议', question: '请给出后续补充数据建议。' },
+  ],
+}
 
-// ─── 1. 文档上传与解析（真实接口）────────────────────────────────
-/**
- * 上传文档并解析为知识片段
- * @param {File[]} files - 文件列表（pdf/doc/xlsx/txt）
- * @param {object} options - { quality, model, projectType }
- * @returns {Promise<{ docIds: string[], summary: string, documents: object[] }>}
- * POST /api/v1/documents/upload
- */
+export function getQuickQuestions(contextType = 'faultTree') {
+  return QUICK_QUESTIONS[contextType] || QUICK_QUESTIONS.faultTree
+}
+
+export async function chatWithAI(context, contextType, message, { onChunk, signal } = {}) {
+  let reply = ''
+  let doneMeta = null
+
+  await postStream('/api/v1/ai/chat/stream', {
+    context: context || { nodes: [], edges: [] },
+    contextType,
+    message,
+  }, {
+    signal,
+    onEvent: (event) => {
+      if (event?.type === 'content') {
+        const chunk = event.content || ''
+        reply += chunk
+        onChunk?.(chunk, { reply })
+        return
+      }
+
+      if (event?.type === 'error') {
+        throw new ApiError(event.message || 'AI 服务暂不可用', {
+          code: event.code,
+          details: event,
+        })
+      }
+
+      if (event?.type === 'done') {
+        doneMeta = event
+      }
+    },
+  })
+
+  return { reply, meta: doneMeta }
+}
+
+export async function getAiModels() {
+  const data = await get('/api/v1/ai/models')
+  if (Array.isArray(data)) return data
+  return data?.list || data?.models || []
+}
+
 export async function uploadDocuments(files, options = {}) {
   const form = new FormData()
-  files.forEach(f => form.append('files', f))
-  if (options.projectId) form.append('projectId', options.projectId)
-  const data = await post('/api/v1/documents/upload', form)
-  const documents = data.documents || []
-  return {
-    docIds: documents.map(d => d.id),
-    summary: documents.length > 0
-      ? `已上传 ${documents.length} 份文档`
-      : '上传完成',
-    documents,
-  }
-}
-
-// ─── 2. AI 生成故障树 ───────────────────────────────────────────────
-/**
- * 基于已上传文档生成故障树
- * @param {string[]} docIds - 文档 ID 列表
- * @param {string} topEvent - 顶事件描述
- * @param {object} config - { quality, depth, maxNodes }
- * @returns {Promise<{ nodes: Node[], edges: Edge[], accuracy: number }>}
- *
- * TODO: 替换为实际 AI 生成接口
- * POST /api/fault-tree/generate
- * Body: { docIds, topEvent, config }
- */
-export async function generateFaultTree(docIds, topEvent, config = {}) {
-  await delay(2000)
-  console.log('[aiService] generateFaultTree', { docIds, topEvent, config })
-  // TODO: const res = await fetch(`${BASE_URL}/fault-tree/generate`, {
-  // TODO:   method: 'POST',
-  // TODO:   headers: { 'Content-Type': 'application/json' },
-  // TODO:   body: JSON.stringify({ docIds, topEvent, config })
-  // TODO: })
-  // TODO: return res.json()
-
-  // Mock 返回 —— 一个简单的故障树结构
-  const id = `proj_${Date.now()}`
-  return {
-    projectId: id,
-    nodes: [
-      { id: 'root', type: 'topEvent', name: topEvent || '顶事件', x: 0, y: 0, width: 140, height: 60 },
-      { id: 'gate1', type: 'gate', name: 'OR', gateType: 'OR', x: 0, y: 0, width: 80, height: 64 },
-      { id: 'mid1', type: 'midEvent', name: 'AI生成中间事件1', x: 0, y: 0, width: 120, height: 56 },
-      { id: 'mid2', type: 'midEvent', name: 'AI生成中间事件2', x: 0, y: 0, width: 120, height: 56 },
-      { id: 'b1', type: 'basicEvent', name: 'AI生成底事件1', probability: 0.02, x: 0, y: 0, width: 110, height: 56 },
-      { id: 'b2', type: 'basicEvent', name: 'AI生成底事件2', probability: 0.01, x: 0, y: 0, width: 110, height: 56 },
-    ],
-    edges: [
-      { id: 'e1', from: 'root', to: 'gate1' },
-      { id: 'e2', from: 'gate1', to: 'mid1' },
-      { id: 'e3', from: 'gate1', to: 'mid2' },
-      { id: 'e4', from: 'mid1', to: 'b1' },
-      { id: 'e5', from: 'mid2', to: 'b2' },
-    ],
-    accuracy: 0.83,  // 结构准确率（目标 ≥ 80%）
-  }
-}
-
-// ─── 3. AI 生成知识图谱 ─────────────────────────────────────────────
-/**
- * 基于已上传文档生成知识图谱（React Flow 格式）
- * @param {string[]} docIds - 文档 ID 列表
- * @param {object} config - { quality, entityTypes: string[] }
- * @returns {Promise<{ kgId: string, nodes: RFNode[], edges: RFEdge[] }>}
- *
- * TODO: 替换为实际 AI 知识图谱生成接口
- * POST /api/knowledge-graph/generate
- * Body: { docIds, config }
- */
-export async function generateKnowledgeGraph(docIds, config = {}) {
-  await delay(2500)
-  console.log('[aiService] generateKnowledgeGraph', { docIds, config })
-  // TODO: const res = await fetch(`${BASE_URL}/knowledge-graph/generate`, {
-  // TODO:   method: 'POST',
-  // TODO:   headers: { 'Content-Type': 'application/json' },
-  // TODO:   body: JSON.stringify({ docIds, config })
-  // TODO: })
-  // TODO: return res.json()
-
-  // Mock 返回 —— React Flow 格式节点与边
-  return {
-    kgId: `kg_${Date.now()}`,
-    nodes: [
-      { id: 'e1', type: 'entityNode', position: { x: 300, y: 100 }, data: { label: '泵体', entityType: 'component', description: '核心泵体部件', sourceDoc: '' } },
-      { id: 'e2', type: 'eventNode',  position: { x: 100, y: 250 }, data: { label: '过热故障', entityType: 'event', description: '温度异常升高', sourceDoc: '' } },
-      { id: 'e3', type: 'entityNode', position: { x: 500, y: 250 }, data: { label: '冷却系统', entityType: 'component', description: '负责散热', sourceDoc: '' } },
-      { id: 'e4', type: 'causeNode',  position: { x: 100, y: 400 }, data: { label: '冷却液泄漏', entityType: 'cause', description: '根本原因', sourceDoc: '' } },
-    ],
-    edges: [
-      { id: 'ke1', source: 'e1', target: 'e2', label: '导致', type: 'smoothstep' },
-      { id: 'ke2', source: 'e3', target: 'e1', label: '冷却', type: 'smoothstep' },
-      { id: 'ke3', source: 'e4', target: 'e2', label: '引发', type: 'smoothstep' },
-    ],
-    entityCount: 4,
-    relationCount: 3,
-  }
-}
-
-// ─── 4. AI 逻辑校验（转发到对应专项服务）───────────────────────
-/**
- * 校验图结构逻辑合理性，返回问题列表
- * @param {object[]} nodes
- * @param {object[]} edges
- * @param {'faultTree'|'knowledge'} graphType
- * @param {string} [projectId] - 需要 projectId 才能调真实接口
- * @returns {Promise<{ issues: AiIssue[], suggestions: string[] }>}
- */
-export async function validateGraph(nodes, edges, graphType = 'faultTree', projectId) {
-  if (projectId) {
-    if (graphType === 'faultTree') {
-      const data = await apiFtValidate(projectId, { nodes, edges })
-      return {
-        issues: data.issues || [],
-        suggestions: data.issues?.length === 0 ? ['图结构逻辑正确，暂无优化建议'] : [],
-      }
-    } else {
-      const data = await apiKgValidate(projectId, { rfNodes: nodes, rfEdges: edges })
-      return {
-        issues: data.issues || [],
-        suggestions: data.issues?.length === 0 ? ['图谱结构正确，暂无优化建议'] : [],
-      }
+  files.forEach((file) => form.append('files', file))
+  Object.entries(options).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') {
+      form.append(k, String(v))
     }
+  })
+  const data = await post('/api/v1/documents/upload', form)
+  return {
+    docIds: data?.docIds || data?.list?.map((item) => item.id) || [],
   }
-  // 无 projectId 时降级到本地校验（故障树）
-  if (graphType === 'faultTree') {
-    const { validateFaultTree } = await import('../utils/aiValidator.js')
-    const issues = validateFaultTree(nodes, edges)
-    return { issues, suggestions: issues.length === 0 ? ['图结构逻辑正确，暂无优化建议'] : [] }
-  }
-  return { issues: [], suggestions: ['知识图谱 AI 校验功能即将上线'] }
 }
 
-// ─── 5. 版本管理（兼容层，已迁移至 collaborationService）────────
-/**
- * @deprecated 请直接使用 collaborationService.listVersions
- */
-export async function listVersions(projectId, params) {
-  const data = await colListVersions(projectId, params)
-  return data.list || []
+function normalizeTaskResponse(data, fallbackProjectId) {
+  const task = data?.task || data?.result || data
+  return {
+    ...data,
+    taskId: task?.taskId || task?.id || data?.taskId || '',
+    projectId: task?.projectId || data?.projectId || fallbackProjectId || '',
+    status: task?.status || data?.status || 'pending',
+    task,
+  }
 }
 
-/**
- * @deprecated 请直接使用 collaborationService.createVersion
- */
-export async function saveVersion(projectId, snapshot, label = '') {
-  const data = await colCreateVersion(projectId, {
-    label: label || `版本 ${new Date().toLocaleString('zh-CN')}`,
+export function generateFaultTree(docIds, topEvent, config = {}, projectId) {
+  return post('/api/v1/ai/fault-trees/generate', {
+    docIds,
+    topEvent,
+    config,
+    ...(projectId ? { projectId } : {}),
+  }).then((data) => normalizeTaskResponse(data, projectId))
+}
+
+export function generateKnowledgeGraph(docIds, config = {}, projectId) {
+  return post('/api/v1/ai/knowledge-graphs/generate', {
+    docIds,
+    config,
+    ...(projectId ? { projectId } : {}),
+  }).then((data) => normalizeTaskResponse(data, projectId))
+}
+
+export function getTaskStatus(taskId) {
+  return get(`/api/v1/ai/tasks/${taskId}`).then((data) => ({
+    ...data,
+    task: data?.task || data,
+  }))
+}
+
+export async function saveVersion(projectId, snapshot, description = '') {
+  return createVersion(projectId, {
+    label: description || undefined,
     snapshot,
   })
-  return data.version
 }
 
-// ─── 6. AI 对话问答 ─────────────────────────────────────────────────
-/**
- * 向 AI 助手发送消息，携带当前图的上下文
- * @param {object} contextData  - 当前图的 JSON 数据 { nodes, edges }
- * @param {'faultTree'|'knowledgeGraph'} contextType - 图类型
- * @param {string} userMessage  - 用户提问文本
- * @returns {Promise<{ reply: string }>}
- *
- * TODO: 替换为实际后端接口
- * POST /api/ai/chat
- * Body: { context: contextData, type: contextType, message: userMessage }
- */
-export async function chatWithAI(contextData, contextType, userMessage) {
-  await delay(1200)
-  console.log('[aiService] chatWithAI', { contextType, userMessage, nodeCount: contextData?.nodes?.length })
-
-  // TODO: const res = await fetch(`${BASE_URL}/ai/chat`, {
-  // TODO:   method: 'POST',
-  // TODO:   headers: { 'Content-Type': 'application/json' },
-  // TODO:   body: JSON.stringify({
-  // TODO:     context: contextData,
-  // TODO:     type: contextType,
-  // TODO:     message: userMessage,
-  // TODO:   }),
-  // TODO: })
-  // TODO: return res.json()  // { reply: string }
-
-  // Mock 回复
-  const nodeCount = contextData?.nodes?.length ?? 0
-  const edgeCount = contextData?.edges?.length ?? 0
-  const mockReplies = {
-    faultTree: [
-      `当前故障树包含 ${nodeCount} 个节点、${edgeCount} 条边。从结构来看，建议检查所有中间事件是否都连接了逻辑门，确保故障传播路径完整。`,
-      `基于当前 ${nodeCount} 个节点的故障树，共有 ${edgeCount} 条逻辑关系。建议为基本事件补充概率数值，以便后续进行定量分析（如最小割集计算）。`,
-      `故障树结构分析完毕。当前共 ${nodeCount} 节点，拓扑深度较浅，可考虑进一步细化中间事件，提高分析精度。`,
-    ],
-    knowledgeGraph: [
-      `当前知识图谱包含 ${nodeCount} 个实体节点和 ${edgeCount} 条关系边。建议检查孤立节点（无关系的实体），它们可能影响图谱完整性。`,
-      `基于当前图谱的 ${edgeCount} 条关系，实体之间的连接密度为 ${nodeCount > 0 ? (edgeCount / nodeCount).toFixed(2) : 0}。建议补充关键实体间的语义关系，增强推理能力。`,
-      `知识图谱分析完成。现有 ${nodeCount} 个实体，可考虑按实体类型（组件/事件/原因）分层聚类，以优化可读性。`,
-    ],
+export async function validateGraph({ nodes = [], edges = [] }) {
+  const issues = []
+  if (!Array.isArray(nodes) || !Array.isArray(edges)) {
+    issues.push({ level: 'error', message: '图数据格式不正确' })
   }
-  const pool = mockReplies[contextType] ?? mockReplies.faultTree
-  return { reply: pool[Math.floor(Math.random() * pool.length)] }
-}
-
-/**
- * 获取快捷提问列表（纯前端，无需 API）
- * @param {'faultTree'|'knowledgeGraph'} contextType
- * @returns {{ id: string, label: string, question: string }[]}
- */
-export function getQuickQuestions(contextType) {
-  const questions = {
-    faultTree: [
-      { id: 'q1', label: '🔍 结构分析', question: '分析当前故障树的结构，找出潜在的逻辑缺陷或不完整路径' },
-      { id: 'q2', label: '⚠️ 风险预警', question: '识别故障树中概率最高的失效路径，给出风险等级评估' },
-      { id: 'q3', label: '📊 最小割集', question: '计算或估算当前故障树的最小割集，列出关键失效组合' },
-      { id: 'q4', label: '✅ 完整性检查', question: '检查是否存在孤立节点或未连接的逻辑门，给出修复建议' },
-    ],
-    knowledgeGraph: [
-      { id: 'q1', label: '🔍 关系分析', question: '分析当前知识图谱中各实体间的核心关系，找出关键路径' },
-      { id: 'q2', label: '🕸️ 孤立节点', question: '检测图谱中是否存在孤立实体节点，并给出补充建议' },
-      { id: 'q3', label: '📈 密度评估', question: '评估当前知识图谱的连接密度，给出优化建议' },
-      { id: 'q4', label: '🏷️ 实体分类', question: '对现有实体进行分类统计，分析各类型实体的分布情况' },
-    ],
+  if (nodes.length === 0) {
+    issues.push({ level: 'warning', message: '当前图为空，建议先添加节点' })
   }
-  return questions[contextType] ?? questions.faultTree
+  return { passed: issues.every((it) => it.level !== 'error'), issues }
 }
-
-/**
- * 保存项目快照为新版本（@deprecated 请使用 collaborationService.createVersion）
- * 此函数已由上方兼容层替换，原实现已移除
- */

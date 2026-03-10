@@ -15,6 +15,7 @@ APIREQUIRE.md
 OptiTree Backend API (Current Implemented Stage).md
 .env.development
 .env.production
+*.md
 
 # Editor directories and files
 .vscode/*

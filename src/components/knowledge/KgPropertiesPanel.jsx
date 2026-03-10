@@ -67,8 +67,6 @@ export default function KgPropertiesPanel({ collapsed, onCollapsedChange }) {
         edgeColor: selectedEdge.style?.stroke      ?? '#94a3b8',
         animated:  selectedEdge.animated           ?? false,
       })
-    } else {
-      form.resetFields()
     }
   }, [selectedNode?.id, selectedNode?.data, selectedNode?.style, selectedEdge?.id, selectedEdge?.type, selectedEdge?.style]) // eslint-disable-line
 
@@ -129,6 +127,9 @@ export default function KgPropertiesPanel({ collapsed, onCollapsedChange }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-3">
+          {/* Keep form instance connected even when no node/edge is selected. */}
+          <Form form={form} style={{ display: 'none' }} />
+
           {!selectedNode && !selectedEdge && (
             <Text className="text-gray-400 text-xs">点击节点或连线查看属性</Text>
           )}

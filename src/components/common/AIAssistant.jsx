@@ -20,6 +20,7 @@ import {
   CloseOutlined,
   SendOutlined,
   ClearOutlined,
+  BorderOutlined,
 } from '@ant-design/icons'
 import { chatWithAI, getQuickQuestions } from '../../services/aiService'
 
@@ -82,6 +83,124 @@ function calcPanelPos(btnX, btnY, panelW, panelH) {
   return { left, top }
 }
 
+// ─── Markdown 行内元素渲染 ──────────────────────────────────────────
+function renderInline(text) {
+  if (!text) return null
+  // 按优先级分割：粗斜体 > 粗体 > 行内代码 > 斜体
+  const parts = text.split(/(\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|`[^`]+`|\*[^\s*][^\n*]*\*)/g)
+  return parts.map((seg, i) => {
+    if (seg.startsWith('***') && seg.endsWith('***'))
+      return <strong key={i}><em>{seg.slice(3, -3)}</em></strong>
+    if (seg.startsWith('**') && seg.endsWith('**'))
+      return <strong key={i}>{seg.slice(2, -2)}</strong>
+    if (seg.startsWith('`') && seg.endsWith('`'))
+      return (
+        <code key={i} style={{
+          background: 'rgba(0,0,0,0.07)', padding: '1px 5px',
+          borderRadius: 3, fontSize: '0.88em',
+          fontFamily: '"Fira Code",Consolas,monospace',
+        }}>
+          {seg.slice(1, -1)}
+        </code>
+      )
+    if (seg.startsWith('*') && seg.endsWith('*'))
+      return <em key={i}>{seg.slice(1, -1)}</em>
+    return seg
+  })
+}
+
+// ─── Markdown 块级渲染 ───────────────────────────────────────────────
+function MarkdownContent({ content }) {
+  if (!content) return null
+  const elements = []
+  const lines = content.split('\n')
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    // 代码块
+    if (line.startsWith('```')) {
+      const codeLines = []
+      i++
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        codeLines.push(lines[i])
+        i++
+      }
+      elements.push(
+        <pre key={`c${i}`} style={{
+          background: '#1e1e2e', color: '#cdd6f4',
+          padding: '10px 14px', borderRadius: 8,
+          overflowX: 'auto', fontSize: 12, lineHeight: 1.6,
+          margin: '6px 0', fontFamily: '"Fira Code",Consolas,monospace',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        }}>
+          <code>{codeLines.join('\n')}</code>
+        </pre>
+      )
+    }
+    // 标题
+    else if (/^#{1,3} /.test(line)) {
+      const level = line.match(/^(#+) /)[1].length
+      const txt = line.replace(/^#+ /, '')
+      const sizes = { 1: 16, 2: 15, 3: 14 }
+      elements.push(
+        <div key={`h${i}`} style={{
+          fontWeight: 700, fontSize: sizes[level] || 14,
+          marginTop: level === 1 ? 12 : 8, marginBottom: 3, color: '#111',
+          borderBottom: level <= 2 ? '1px solid #e8e8e8' : 'none', paddingBottom: level <= 2 ? 4 : 0,
+        }}>
+          {renderInline(txt)}
+        </div>
+      )
+    }
+    // 无序列表
+    else if (/^[-*+] /.test(line)) {
+      elements.push(
+        <div key={`li${i}`} style={{ display: 'flex', gap: 7, paddingLeft: 3, marginBottom: 2 }}>
+          <span style={{ color: '#1677ff', flexShrink: 0, lineHeight: '1.7' }}>•</span>
+          <span style={{ flex: 1 }}>{renderInline(line.replace(/^[-*+] /, ''))}</span>
+        </div>
+      )
+    }
+    // 有序列表
+    else if (/^\d+[.)\s]/.test(line)) {
+      const m = line.match(/^(\d+)[.)\s]\s*(.*)$/)
+      if (m) elements.push(
+        <div key={`ol${i}`} style={{ display: 'flex', gap: 5, paddingLeft: 3, marginBottom: 2 }}>
+          <span style={{ color: '#1677ff', flexShrink: 0, minWidth: 18, lineHeight: '1.7', fontVariantNumeric: 'tabular-nums' }}>{m[1]}.</span>
+          <span style={{ flex: 1 }}>{renderInline(m[2])}</span>
+        </div>
+      )
+    }
+    // 引用块
+    else if (/^> /.test(line)) {
+      elements.push(
+        <div key={`bq${i}`} style={{
+          borderLeft: '3px solid #1677ff', paddingLeft: 10,
+          color: '#595959', fontStyle: 'italic', margin: '4px 0',
+        }}>
+          {renderInline(line.slice(2))}
+        </div>
+      )
+    }
+    // 分割线
+    else if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+      elements.push(<hr key={`hr${i}`} style={{ border: 'none', borderTop: '1px solid #e0e0e0', margin: '8px 0' }} />)
+    }
+    // 空行
+    else if (line.trim() === '') {
+      if (elements.length > 0) elements.push(<div key={`br${i}`} style={{ height: 4 }} />)
+    }
+    // 普通段落
+    else {
+      elements.push(
+        <div key={`p${i}`} style={{ lineHeight: 1.7 }}>{renderInline(line)}</div>
+      )
+    }
+    i++
+  }
+  return <>{elements}</>
+}
+
 // ─── 消息气泡 ────────────────────────────────────────────────────────
 function MessageBubble({ role, content }) {
   const isUser = role === 'user'
@@ -98,14 +217,14 @@ function MessageBubble({ role, content }) {
         </div>
       )}
       <div style={{
-        maxWidth: '75%', padding: '8px 12px',
+        maxWidth: '85%', padding: '8px 12px',
         borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
         background: isUser ? 'linear-gradient(135deg,#1677ff,#4096ff)' : '#f0f2f5',
         color: isUser ? '#fff' : '#1a1a1a',
         fontSize: 13, lineHeight: 1.6, wordBreak: 'break-word',
         boxShadow: isUser ? '0 2px 8px rgba(22,119,255,0.25)' : '0 1px 4px rgba(0,0,0,0.08)',
       }}>
-        {content}
+        {isUser ? content : <MarkdownContent content={content} />}
       </div>
     </div>
   )
@@ -119,12 +238,14 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
   const [messages,   setMessages]   = useState([])
   const [inputVal,   setInputVal]   = useState('')
   const [loading,    setLoading]    = useState(false)
+  const [isTyping,   setIsTyping]   = useState(false)
   const [showBubble, setShowBubble] = useState(false)
   const [panelSize,  setPanelSize]  = useState(getInitialPanelSize)
 
   const quickQuestions = getQuickQuestions(contextType)
   const messagesEndRef = useRef(null)
   const inputRef       = useRef(null)
+  const abortCtrlRef   = useRef(null)
 
   // 按钮拖拽状态（ref 保持引用稳定）
   const btnDrag = useRef({ active: false, startMX: 0, startMY: 0, startBX: 0, startBY: 0, moved: false })
@@ -280,24 +401,59 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     document.addEventListener('mouseup',   onResizeMouseUp)
   }, [panelSize, onResizeMouseMove, onResizeMouseUp])
 
+  // ── 中断回答 ────────────────────────────────────────────────
+  const handleStop = useCallback(() => {
+    abortCtrlRef.current?.abort()
+  }, [])
+
   // ── 发送消息 ────────────────────────────────────────────────
   const handleSend = useCallback(async (text) => {
     const msg = (text ?? inputVal).trim()
     if (!msg || loading) return
+    const userMsgId = Date.now()
+    const aiMsgId   = userMsgId + 1
     setInputVal('')
-    setMessages(prev => [...prev, { id: Date.now(), role: 'user', content: msg }])
+    setMessages(prev => [
+      ...prev,
+      { id: userMsgId, role: 'user', content: msg },
+    ])
+    const controller = new AbortController()
+    abortCtrlRef.current = controller
     setLoading(true)
+    setIsTyping(true)
+    let aiMsgAdded = false
     try {
       const ctx = getContext?.() ?? {}
-      const { reply } = await chatWithAI(ctx, contextType, msg)
-      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'ai', content: reply }])
-    } catch {
-      setMessages(prev => [...prev, {
-        id: Date.now() + 1, role: 'ai',
-        content: '抱歉，AI 助手暂时无法响应，请稍后重试。',
-      }])
+      await chatWithAI(ctx, contextType, msg, {
+        signal: controller.signal,
+        onChunk: (chunk) => {
+          if (!chunk) return
+          setIsTyping(false)
+          if (!aiMsgAdded) {
+            aiMsgAdded = true
+            setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: chunk }])
+          } else {
+            setMessages(prev => prev.map(item =>
+              item.id === aiMsgId ? { ...item, content: item.content + chunk } : item
+            ))
+          }
+        },
+      })
+    } catch (err) {
+      const isAborted = err?.name === 'AbortError' || controller.signal.aborted
+      if (isAborted) {
+        if (!aiMsgAdded) {
+          setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '（已停止生成）' }])
+        }
+      } else {
+        if (!aiMsgAdded) {
+          setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '抱歉，AI 助手暂时无法响应，请稍后重试。' }])
+        }
+      }
     } finally {
+      abortCtrlRef.current = null
       setLoading(false)
+      setIsTyping(false)
     }
   }, [inputVal, loading, getContext, contextType])
 
@@ -402,7 +558,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               </div>
             )}
             {messages.map(m => <MessageBubble key={m.id} role={m.role} content={m.content} />)}
-            {loading && (
+            {isTyping && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{
                   width: 26, height: 26, borderRadius: '50%',
@@ -417,7 +573,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                   display: 'flex', alignItems: 'center', gap: 7,
                 }}>
                   <Spin size="small" />
-                  <span style={{ fontSize: 11, color: '#8c8c8c' }}>AI 正在思考中...</span>
+                  <span style={{ fontSize: 11, color: '#8c8c8c' }}>AI 正在生成回复...</span>
                 </div>
               </div>
             )}
@@ -431,26 +587,43 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 ref={inputRef}
                 value={inputVal}
                 onChange={e => setInputVal(e.target.value)}
-                onPressEnter={e => { if (!e.shiftKey) { e.preventDefault(); handleSend() } }}
+                onPressEnter={e => { if (!e.shiftKey) { e.preventDefault(); !loading && handleSend() } }}
                 placeholder="输入问题，Enter 发送，Shift+Enter 换行"
                 autoSize={{ minRows: 1, maxRows: 4 }}
                 disabled={loading}
                 style={{ flex: 1, borderRadius: 9, fontSize: 12, resize: 'none', background: '#fff' }}
               />
-              <button
-                onClick={() => handleSend()}
-                disabled={!inputVal.trim() || loading}
-                style={{
-                  width: 32, height: 32, borderRadius: '50%', border: 'none', flexShrink: 0,
-                  background: inputVal.trim() && !loading
-                    ? 'linear-gradient(135deg,#1677ff,#4096ff)' : '#e8e8e8',
-                  cursor: inputVal.trim() && !loading ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'background 0.18s',
-                }}
-              >
-                <SendOutlined style={{ fontSize: 13, color: inputVal.trim() && !loading ? '#fff' : '#bfbfbf' }} />
-              </button>
+              {loading ? (
+                <button
+                  onClick={handleStop}
+                  title="停止生成"
+                  style={{
+                    width: 32, height: 32, borderRadius: '50%', border: 'none', flexShrink: 0,
+                    background: 'linear-gradient(135deg,#ff4d4f,#ff7875)',
+                    cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'background 0.18s',
+                    boxShadow: '0 2px 8px rgba(255,77,79,0.35)',
+                  }}
+                >
+                  <BorderOutlined style={{ fontSize: 13, color: '#fff' }} />
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleSend()}
+                  disabled={!inputVal.trim()}
+                  style={{
+                    width: 32, height: 32, borderRadius: '50%', border: 'none', flexShrink: 0,
+                    background: inputVal.trim()
+                      ? 'linear-gradient(135deg,#1677ff,#4096ff)' : '#e8e8e8',
+                    cursor: inputVal.trim() ? 'pointer' : 'not-allowed',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'background 0.18s',
+                  }}
+                >
+                  <SendOutlined style={{ fontSize: 13, color: inputVal.trim() ? '#fff' : '#bfbfbf' }} />
+                </button>
+              )}
             </div>
           </div>
 

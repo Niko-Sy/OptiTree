@@ -5,8 +5,8 @@
  * 数据通过后端 API 持久化（/api/v1/knowledge-graphs/{id}/graph）
  */
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { message } from 'antd'
+import { useSearchParams, useNavigate } from 'react-router-dom'
+import { message, Spin } from 'antd'
 import { KnowledgeStoreProvider, useKnowledgeStore, useKnowledgeActions } from '../store/useKnowledgeStore'
 import KgToolbar from '../components/knowledge/KgToolbar'
 import KgCanvas from '../components/knowledge/KgCanvas'
@@ -108,16 +108,42 @@ function KnowledgeEditorInner({ kgId, kgName }) {
 
 // ─── 页面包装器 ────────────────────────────────────────────────────
 export default function KnowledgeGraphEditor() {
+  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const kgId = searchParams.get('id')
   const [kgName, setKgName] = useState('未命名知识图谱')
+  const [accessReady, setAccessReady] = useState(false)
 
   useEffect(() => {
-    if (!kgId) return
+    if (!kgId) {
+      message.warning('缺少项目 ID')
+      navigate('/dashboard')
+      return
+    }
     getProject(kgId)
-      .then(({ project }) => setKgName(project?.name || '未命名知识图谱'))
-      .catch(() => {})
-  }, [kgId])
+      .then(({ project }) => {
+        const status = project?.generation_status || 'completed'
+        if (status !== 'completed') {
+          message.warning('项目仍在生成中，暂不可进入知识图谱编辑器')
+          navigate('/dashboard')
+          return
+        }
+        setKgName(project?.name || '未命名知识图谱')
+        setAccessReady(true)
+      })
+      .catch(() => {
+        message.error('项目不存在或无访问权限')
+        navigate('/dashboard')
+      })
+  }, [kgId, navigate])
+
+  if (!accessReady) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-50">
+        <Spin tip="加载项目中..." />
+      </div>
+    )
+  }
 
   return (
     <KnowledgeStoreProvider>

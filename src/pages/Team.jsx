@@ -272,6 +272,8 @@ function ProjectList({ items, totalCount, loading, search, onNavigate }) {
 // ─── 单个项目行 ──────────────────────────────────────────────────
 function ProjectRow({ project, onNavigate }) {
   const isKg = project.projectType === 'kg'
+  const status = project.generation_status || 'completed'
+  const blocked = status === 'pending_generating' || status === 'generating' || status === 'failed'
   const iconBg    = isKg ? 'bg-purple-50' : 'bg-blue-50'
   const iconColor = isKg ? '#722ed1' : '#1677ff'
 
@@ -303,6 +305,9 @@ function ProjectRow({ project, onNavigate }) {
             <Tag color={isKg ? 'purple' : 'blue'} className="text-xs">
               {isKg ? '知识图谱' : '故障树'}
             </Tag>
+            {status === 'pending_generating' && <Tag color="gold" className="text-xs">排队中</Tag>}
+            {status === 'generating' && <Tag color="processing" className="text-xs">生成中</Tag>}
+            {status === 'failed' && <Tag color="error" className="text-xs">生成失败</Tag>}
           </div>
           <div className="flex items-center gap-4 mt-1 flex-wrap">
             <span className="text-xs text-gray-400 flex items-center gap-1">
@@ -346,9 +351,10 @@ function ProjectRow({ project, onNavigate }) {
           <Button
             size="small"
             icon={<NodeIndexOutlined />}
+            disabled={blocked}
             onClick={() => onNavigate(isKg ? `/knowledge?id=${project.id}` : `/editor?id=${project.id}`)}
           >
-            编辑
+            {status === 'generating' || status === 'pending_generating' ? '生成中' : status === 'failed' ? '不可编辑' : '编辑'}
           </Button>
           <Button
             type="primary"

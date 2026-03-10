@@ -1,67 +1,45 @@
-/**
- * knowledgeGraphService.js — 知识图谱图数据管理
- *
- * 注意：后端 KG 节点格式与前端 React Flow 格式存在差异，
- * 需通过 kgAdapter.js 进行转换。
- */
-import { get, post } from './apiClient'
+import { get, post, download } from './apiClient'
 import { rfNodeToBackend, backendToRFNode } from '../utils/kgAdapter'
 
-/**
- * GET /api/v1/knowledge-graphs/{projectId}/graph
- * 返回转换为 React Flow 格式的节点和边
- */
-export async function getKnowledgeGraph(projectId) {
-  const data = await get(`/api/v1/knowledge-graphs/${projectId}/graph`)
+export function importKnowledgeGraph({ projectId, rfNodes, rfEdges, revision = 0 }) {
+  const backendNodes = (rfNodes || []).map(rfNodeToBackend)
+  return post('/api/v1/knowledge-graphs/import', { projectId, rfNodes: backendNodes, rfEdges, revision })
+}
+
+function normalizeRFNode(node, index) {
+  const n = node?.position ? node : backendToRFNode(node || {})
   return {
-    rfNodes: (data.rfNodes || []).map(backendToRFNode),
-    rfEdges: data.rfEdges || [],
-    revision: data.revision,
+    id: n.id || `kg_node_${index}`,
+    type: n.type || 'entityNode',
+    position: {
+      x: Number.isFinite(n.position?.x) ? n.position.x : 0,
+      y: Number.isFinite(n.position?.y) ? n.position.y : 0,
+    },
+    data: n.data || { label: '未命名', entityType: 'entityNode' },
+    ...(n.style ? { style: n.style } : {}),
   }
 }
 
-/**
- * POST /api/v1/knowledge-graphs/{projectId}/graph/save
- * 自动将 RF 格式节点转为后端格式后发送
- * @param {string} projectId
- * @param {{ rfNodes, rfEdges, revision }} body
- */
-export async function saveKnowledgeGraph(projectId, { rfNodes, rfEdges, revision }) {
-  return post(`/api/v1/knowledge-graphs/${projectId}/graph/save`, {
-    rfNodes: rfNodes.map(rfNodeToBackend),
-    rfEdges,
-    revision,
-  })
+export async function getKnowledgeGraph(projectId) {
+  const data = await get(`/api/v1/knowledge-graphs/${projectId}/graph`)
+  const graph = data?.graph || data || {}
+  const rawNodes = graph.rfNodes || graph.nodes || []
+  const rawEdges = graph.rfEdges || graph.edges || []
+  return {
+    rfNodes: rawNodes.map((node, i) => normalizeRFNode(node, i)),
+    rfEdges: rawEdges,
+    revision: graph.revision ?? null,
+  }
 }
 
-/**
- * POST /api/v1/knowledge-graphs/{projectId}/validate
- * @param {string} projectId
- * @param {{ rfNodes, rfEdges }} body（前端 RF 格式）
- */
-export async function validateKnowledgeGraph(projectId, { rfNodes, rfEdges }) {
-  return post(`/api/v1/knowledge-graphs/${projectId}/validate`, {
-    rfNodes: rfNodes.map(rfNodeToBackend),
-    rfEdges,
-  })
+export function saveKnowledgeGraph(projectId, payload) {
+  const backendPayload = {
+    ...payload,
+    rfNodes: (payload?.rfNodes || []).map(rfNodeToBackend),
+  }
+  return post(`/api/v1/knowledge-graphs/${projectId}/graph/save`, backendPayload)
 }
 
-/**
- * GET /api/v1/knowledge-graphs/{projectId}/export
- * 返回 Blob
- */
 export async function exportKnowledgeGraph(projectId) {
-  return get(`/api/v1/knowledge-graphs/${projectId}/export`, undefined, { _blob: true })
-}
-
-/**
- * POST /api/v1/knowledge-graphs/import
- * @param {{ projectId, rfNodes, rfEdges }} body（前端 RF 格式）
- */
-export async function importKnowledgeGraph({ projectId, rfNodes, rfEdges }) {
-  return post('/api/v1/knowledge-graphs/import', {
-    projectId,
-    rfNodes: rfNodes.map(rfNodeToBackend),
-    rfEdges,
-  })
+  return download(`/api/v1/knowledge-graphs/${projectId}/export`)
 }
