@@ -7,6 +7,7 @@ import FaultTreeEditor from "./pages/FaultTreeEditor";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import { AuthProvider, useAuth } from "./store/useAuthStore";
+import { NotificationProvider } from "./store/useNotificationStore";
 import "./App.css";
 
 // ─── 懒加载新页面 ──────────────────────────────────────────────────
@@ -14,6 +15,8 @@ const KnowledgeGraphEditor = lazy(() => import('./pages/KnowledgeGraphEditor'))
 const Collaboration = lazy(() => import('./pages/Collaboration'))
 const Profile = lazy(() => import('./pages/Profile'))
 const Team = lazy(() => import('./pages/Team'))
+const Notifications = lazy(() => import('./pages/Notifications'))
+const Help = lazy(() => import('./pages/Help'))
 
 function PageLoading() {
   return (
@@ -49,8 +52,9 @@ export default function App() {
   return (
     <ConfigProvider theme={antTheme} locale={zhCN}>
       <AntApp>
-        <AuthProvider>
-          <BrowserRouter>
+        <NotificationProvider>
+          <AuthProvider>
+            <BrowserRouter>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route
@@ -109,9 +113,30 @@ export default function App() {
                   </RequireAuth>
                 }
               />
+              <Route
+                path="/notifications"
+                element={
+                  <RequireAuth>
+                    <Suspense fallback={<PageLoading />}>
+                      <Notifications />
+                    </Suspense>
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/help"
+                element={
+                  <RequireAuth>
+                    <Suspense fallback={<PageLoading />}>
+                      <Help />
+                    </Suspense>
+                  </RequireAuth>
+                }
+              />
             </Routes>
-          </BrowserRouter>
-        </AuthProvider>
+            </BrowserRouter>
+          </AuthProvider>
+        </NotificationProvider>
       </AntApp>
     </ConfigProvider>
   );

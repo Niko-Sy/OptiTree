@@ -14,9 +14,11 @@ import {
   FileProtectOutlined, TeamOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../../store/useAuthStore'
+import { useNotification } from '../../store/useNotificationStore'
 
 export default function UserAvatar({ size = 32, theme = 'light' }) {
   const { user, logout } = useAuth()
+  const { unreadCount } = useNotification()
   const navigate = useNavigate()
 
   // ── 生成头像背景色（根据用户名哈希）────────────────────────────
@@ -80,12 +82,14 @@ export default function UserAvatar({ size = 32, theme = 'light' }) {
       label: (
         <span className="flex items-center justify-between gap-4">
           通知中心
-          <span className="text-xs bg-blue-500 text-white rounded-full px-1.5 py-0.5 leading-none">
-            新
-          </span>
+          {unreadCount > 0 && (
+            <span className="text-xs bg-blue-500 text-white rounded-full px-1.5 py-0.5 leading-none">
+              {unreadCount}
+            </span>
+          )}
         </span>
       ),
-      onClick: () => message.info('通知中心即将上线'), // TODO: navigate('/notifications')
+      onClick: () => navigate('/notifications'),
     },
     {
       key: 'settings',
@@ -118,7 +122,7 @@ export default function UserAvatar({ size = 32, theme = 'light' }) {
       key: 'help',
       icon: <QuestionCircleOutlined />,
       label: '帮助与反馈',
-      onClick: () => message.info('帮助文档即将上线'), // TODO: open help docs
+      onClick: () => navigate('/help'),
     },
     { type: 'divider' },
 
