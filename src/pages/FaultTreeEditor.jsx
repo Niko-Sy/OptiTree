@@ -14,6 +14,29 @@ import AIAssistant from '../components/common/AIAssistant'
 import { getFaultTreeGraph, saveFaultTreeGraph } from '../services/faultTreeService'
 import { getProject } from '../services/projectService'
 
+const TASK_META_STORAGE_KEY = 'optitree_ai_task_meta'
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'processing', 'retrying', 'queued', 'dispatching', 'accepted', 'parsing', 'producer_queued', 'waiting_project_slot', 'dispatch_retrying', 'enqueued', 'generating'])
+
+function hasBlockingTaskMeta(projectId) {
+  if (!projectId) return false
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TASK_META_STORAGE_KEY) || '{}')
+    const meta = parsed?.[projectId]
+    if (!meta) return false
+
+    const status = meta.status || 'pending'
+    if (status === 'completed') return false
+    if (ACTIVE_TASK_STATUSES.has(status)) return true
+    if (status === 'failed' || status === 'dead' || status === 'cancelled') return true
+
+    const updatedAt = Number(meta.updatedAt || 0)
+    if (!updatedAt) return true
+    return (Date.now() - updatedAt) < 24 * 60 * 60 * 1000
+  } catch {
+    return false
+  }
+}
+
 // ─── Inner editor (needs access to store) ────────────────────────
 function EditorInner({ projectId, projectName }) {
   const nodes = _useRawStore(s => s.nodes, shallow)
@@ -128,8 +151,9 @@ export default function FaultTreeEditor() {
     }
     getProject(projectId)
       .then(({ project }) => {
-        const status = project?.generation_status || 'completed'
-        if (status !== 'completed') {
+        const blockedByMeta = hasBlockingTaskMeta(projectId)
+        const status = project?.generation_status || (blockedByMeta ? 'generating' : 'completed')
+        if (status !== 'completed' || blockedByMeta) {
           message.warning('项目仍在生成中，暂不可进入编辑器')
           navigate('/dashboard')
           return

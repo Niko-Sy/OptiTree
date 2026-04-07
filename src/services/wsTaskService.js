@@ -1,5 +1,5 @@
 import { tokenStore } from './apiClient'
-import { getTaskStatus } from './aiService'
+import { getTaskStatus, getLatestFaultTreeTask } from './aiService'
 
 const WS_BASE = (import.meta.env.VITE_WS_BASE_URL || import.meta.env.VITE_API_BASE_URL || '')
   .replace(/\/$/, '')
@@ -17,15 +17,17 @@ function toWsBase(urlBase) {
 }
 
 const NORMAL_CLOSE = 1000
-const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'dead', 'cancelled'])
 
 function toTaskEvent(task, fallbackProjectId, fallbackTaskId) {
   const status = task?.status || 'pending'
   let event = 'task.progress'
 
   if (status === 'pending') event = 'task.pending'
+  if (status === 'retrying') event = 'task.retrying'
   if (status === 'completed') event = 'task.completed'
   if (status === 'failed') event = 'task.failed'
+  if (status === 'dead') event = 'task.dead'
   if (status === 'cancelled') event = 'task.cancelled'
 
   return {
@@ -38,9 +40,10 @@ function toTaskEvent(task, fallbackProjectId, fallbackTaskId) {
 }
 
 export class TaskWsManager {
-  constructor({ projectId, taskId, token, onEvent, onStateChange, onError }) {
+  constructor({ projectId, taskId, taskType, token, onEvent, onStateChange, onError }) {
     this.projectId = projectId
     this.taskId = taskId
+    this.taskType = taskType
     this.token = token || tokenStore.getAccess()
     this.onEvent = onEvent
     this.onStateChange = onStateChange
@@ -55,6 +58,9 @@ export class TaskWsManager {
     this.pollInFlight = false
     this.pollInterval = 4000
     this.lastTaskStatus = ''
+    this.snapshotTimer = null
+    this.snapshotTimeout = 2000
+    this.gotSnapshot = false
   }
 
   connect() {
@@ -78,16 +84,26 @@ export class TaskWsManager {
     this.ws.onopen = () => {
       this.retryCount = 0
       this.stopPolling()
+      this.gotSnapshot = false
+      this.armSnapshotFallback('on-open')
       this.onStateChange?.('connected')
     }
 
     this.ws.onmessage = (evt) => {
       try {
         const payload = JSON.parse(evt.data)
+        if (payload?.event === 'task.snapshot') {
+          this.gotSnapshot = true
+          this.clearSnapshotFallback()
+        }
+        if (payload?.event === 'task.pending' || payload?.event === 'task.progress' || payload?.event === 'task.retrying' || payload?.event === 'task.completed' || payload?.event === 'task.failed' || payload?.event === 'task.dead' || payload?.event === 'task.cancelled') {
+          this.clearSnapshotFallback()
+        }
         this.lastTaskStatus = payload?.status || payload?.projectStatus || this.lastTaskStatus
         if (TERMINAL_TASK_STATUSES.has(this.lastTaskStatus)) {
           this.stopPolling()
           this.shouldReconnect = false
+          this.clearSnapshotFallback()
         }
         this.onEvent?.(payload)
       } catch {
@@ -102,6 +118,7 @@ export class TaskWsManager {
 
     this.ws.onclose = async (evt) => {
       this.ws = null
+      this.clearSnapshotFallback()
       this.onStateChange?.('closed')
 
       if (!this.shouldReconnect || evt.code === NORMAL_CLOSE) return
@@ -113,16 +130,26 @@ export class TaskWsManager {
   }
 
   async recoverTaskStatus() {
-    if (!this.taskId) return
     try {
-      const data = await getTaskStatus(this.taskId)
-      if (data?.task) {
-        const nextEvent = toTaskEvent(data.task, this.projectId, this.taskId)
-        this.lastTaskStatus = data.task.status || this.lastTaskStatus
+      let task = null
+
+      if (this.taskId) {
+        const data = await getTaskStatus(this.taskId)
+        task = data?.task || null
+      } else if (this.projectId && this.taskType === 'ft') {
+        const latest = await getLatestFaultTreeTask(this.projectId)
+        task = latest?.task || latest || null
+      }
+
+      if (task) {
+        const nextEvent = toTaskEvent(task, this.projectId, this.taskId)
+        this.taskId = nextEvent.taskId || this.taskId
+        this.lastTaskStatus = task.status || this.lastTaskStatus
         this.onEvent?.(nextEvent)
         if (TERMINAL_TASK_STATUSES.has(this.lastTaskStatus)) {
           this.stopPolling()
           this.shouldReconnect = false
+          this.clearSnapshotFallback()
         }
       }
     } catch {
@@ -132,7 +159,9 @@ export class TaskWsManager {
 
   scheduleReconnect() {
     this.retryCount += 1
-    const delay = Math.min(1000 * (2 ** (this.retryCount - 1)), this.maxDelay)
+    const baseDelay = Math.min(1000 * (2 ** (this.retryCount - 1)), this.maxDelay)
+    const jitter = 0.8 + Math.random() * 0.4
+    const delay = Math.round(baseDelay * jitter)
     clearTimeout(this.reconnectTimer)
     this.onStateChange?.('reconnecting', { retryCount: this.retryCount, delay })
     this.reconnectTimer = setTimeout(() => {
@@ -148,11 +177,17 @@ export class TaskWsManager {
     }
   }
 
+  updateTaskType(taskType) {
+    this.taskType = taskType
+  }
+
   startPolling(reason = 'polling') {
-    if (!this.taskId || this.pollTimer) return
+    const canPollByLatest = this.projectId && this.taskType === 'ft'
+    if ((!this.taskId && !canPollByLatest) || this.pollTimer) return
 
     const poll = async () => {
-      if (this.pollInFlight || !this.taskId) return
+      if (this.pollInFlight) return
+      if (!this.taskId && !(this.projectId && this.taskType === 'ft')) return
       this.pollInFlight = true
       try {
         await this.recoverTaskStatus()
@@ -173,9 +208,26 @@ export class TaskWsManager {
     }
   }
 
+  armSnapshotFallback(reason = 'snapshot-timeout') {
+    this.clearSnapshotFallback()
+    this.snapshotTimer = setTimeout(async () => {
+      if (!this.shouldReconnect || this.gotSnapshot) return
+      this.onStateChange?.('recovering', { reason })
+      await this.recoverTaskStatus()
+    }, this.snapshotTimeout)
+  }
+
+  clearSnapshotFallback() {
+    if (this.snapshotTimer) {
+      clearTimeout(this.snapshotTimer)
+      this.snapshotTimer = null
+    }
+  }
+
   disconnect(closeSocket = true, disableReconnect = true) {
     clearTimeout(this.reconnectTimer)
     this.stopPolling()
+    this.clearSnapshotFallback()
     this.shouldReconnect = !disableReconnect
     if (closeSocket && this.ws) {
       this.ws.close(NORMAL_CLOSE)

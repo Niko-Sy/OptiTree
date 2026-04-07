@@ -2,32 +2,66 @@
 import { Card, Button, Tag, Popconfirm, Tooltip, Progress } from 'antd'
 import {
   FolderOpenOutlined, DeleteOutlined, ClockCircleOutlined,
-  ApartmentOutlined, NodeIndexOutlined, TeamOutlined,
+  ApartmentOutlined, NodeIndexOutlined, TeamOutlined, HistoryOutlined,
   ShareAltOutlined, ApiOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
 /** project.type === 'kg' 时渲染知识图谱卡片，否则渲染故障树卡片 */
 const GENERATING_STATUSES = new Set(['pending_generating', 'generating'])
+const FAILED_STATUSES = new Set(['failed', 'dead', 'cancelled'])
+
+function normalizeWsState(wsState) {
+  if (wsState === 'connected') return { color: 'success', label: '连接稳定' }
+  if (wsState === 'reconnecting') return { color: 'warning', label: '重连中' }
+  if (wsState === 'polling' || wsState === 'recovering') return { color: 'gold', label: '兜底恢复中' }
+  return null
+}
 
 function getStatusMeta(status) {
-  if (status === 'pending_generating') return { color: 'gold', label: '排队中' }
-  if (status === 'generating') return { color: 'processing', label: '生成中' }
+  if (status === 'pending_generating' || status === 'generating') return { color: 'processing', label: '生成中' }
   if (status === 'failed') return { color: 'error', label: '生成失败' }
   return { color: 'success', label: '已完成' }
 }
 
-export default function ProjectCard({ project, onDelete, taskProgress, onRetry, retryLoading = false }) {
+function resolveDisplayStatus(projectStatus, taskInfo) {
+  if (taskInfo?.status) {
+    if (taskInfo.status === 'completed') return 'completed'
+    if (FAILED_STATUSES.has(taskInfo.status)) return 'failed'
+    return 'generating'
+  }
+  if (projectStatus === 'failed') return 'failed'
+  if (GENERATING_STATUSES.has(projectStatus)) return 'generating'
+  return 'completed'
+}
+
+function toTimeLabel(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+export default function ProjectCard({ cardId, highlighted = false, project, onDelete, taskProgress, taskInfo, onRetry, retryLoading = false }) {
   const navigate = useNavigate()
   const isKg = project.type === 'kg'
   const generationStatus = project.generation_status || 'completed'
-  const isGenerating = GENERATING_STATUSES.has(generationStatus)
-  const isFailed = generationStatus === 'failed'
-  const statusMeta = getStatusMeta(generationStatus)
+  const displayStatus = resolveDisplayStatus(generationStatus, taskInfo)
+  const isGenerating = displayStatus === 'generating'
+  const isFailed = displayStatus === 'failed'
+  const canOpen = displayStatus === 'completed'
+  const statusMeta = getStatusMeta(displayStatus)
+  const wsMeta = normalizeWsState(taskInfo?.wsState)
+  const stageLabel = taskInfo?.stageLabel || (isGenerating ? '正在生成，请稍候...' : '')
+  const progressValue = taskInfo?.progress ?? taskProgress ?? 0
+  const failedReason = taskInfo?.errorMessage || '生成失败，可使用原参数重试。'
+  const retryCount = taskInfo?.retryCount ?? 0
+  const updatedTime = toTimeLabel(taskInfo?.updatedAt)
+  const stageHistory = Array.isArray(taskInfo?.stageHistory) ? taskInfo.stageHistory : []
 
   function handleOpen(e) {
     e?.stopPropagation()
-    if (isGenerating || isFailed) return
+    if (!canOpen) return
     if (isKg) navigate(`/knowledge?id=${project.id}`)
     else navigate(`/editor?id=${project.id}`)
   }
@@ -52,7 +86,8 @@ export default function ProjectCard({ project, onDelete, taskProgress, onRetry, 
 
   return (
     <Card
-      className={`fade-in-up hover:shadow-md transition-shadow ${isGenerating || isFailed ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      id={cardId}
+      className={`fade-in-up hover:shadow-md transition-shadow ${canOpen ? 'cursor-pointer' : 'cursor-not-allowed'} ${highlighted ? 'ring-2 ring-blue-400 ring-offset-1' : ''}`}
       styles={{ body: { padding: '16px' } }}
       onClick={handleOpen}
     >
@@ -134,17 +169,49 @@ export default function ProjectCard({ project, onDelete, taskProgress, onRetry, 
       {isGenerating && (
         <div className="mt-3">
           <Progress
-            percent={Math.max(0, Math.min(100, Math.round(taskProgress ?? 0)))}
+            percent={Math.max(0, Math.min(100, Math.round(progressValue)))}
             status="active"
             size="small"
             strokeColor={{ from: '#1677ff', to: '#52c41a' }}
           />
+          <div className="mt-1.5 flex items-center justify-between gap-2">
+            <span className="text-xs text-gray-500 truncate">{stageLabel}</span>
+            <div className="flex items-center gap-1 shrink-0">
+              {retryCount > 0 && (
+                <Tag color="orange" className="text-[10px] m-0 whitespace-nowrap">重连 {retryCount}</Tag>
+              )}
+              {wsMeta && (
+                <Tag color={wsMeta.color} className="text-[10px] m-0 whitespace-nowrap">{wsMeta.label}</Tag>
+              )}
+            </div>
+          </div>
+          <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-400">
+            <span>{updatedTime ? `最近更新 ${updatedTime}` : '等待首条任务进度'}</span>
+            {stageHistory.length > 0 && (
+              <Tooltip
+                placement="topRight"
+                title={(
+                  <div className="max-w-64">
+                    {stageHistory.map((item) => (
+                      <div key={`${item.at}-${item.label}`} className="text-xs leading-5">
+                        {toTimeLabel(item.at) || '--:--:--'} · {item.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              >
+                <span className="inline-flex items-center gap-1 cursor-help text-blue-500">
+                  <HistoryOutlined /> 阶段记录
+                </span>
+              </Tooltip>
+            )}
+          </div>
         </div>
       )}
 
       {isFailed && (
         <div className="mt-3 flex items-center justify-between gap-2">
-          <p className="text-xs text-red-500">生成失败，可使用原参数重试。</p>
+          <p className="text-xs text-red-500 truncate">{failedReason}</p>
           <Button size="small" type="primary" danger ghost onClick={handleRetry} loading={retryLoading}>
             一键重试
           </Button>
@@ -159,7 +226,7 @@ export default function ProjectCard({ project, onDelete, taskProgress, onRetry, 
           className="flex-1"
           size="small"
           onClick={handleOpen}
-          disabled={isGenerating || isFailed}
+          disabled={!canOpen}
           style={isKg ? { borderColor: '#722ed1', color: '#722ed1' } : {}}
         >
           {isGenerating ? '生成中...' : isFailed ? '生成失败' : (isKg ? '打开知识图谱' : '打开编辑器')}

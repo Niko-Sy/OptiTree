@@ -17,6 +17,29 @@ import AIAssistant from '../components/common/AIAssistant'
 import { getKnowledgeGraph, saveKnowledgeGraph } from '../services/knowledgeGraphService'
 import { getProject } from '../services/projectService'
 
+const TASK_META_STORAGE_KEY = 'optitree_ai_task_meta'
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'processing', 'retrying', 'queued', 'dispatching', 'accepted', 'parsing', 'producer_queued', 'waiting_project_slot', 'dispatch_retrying', 'enqueued', 'generating'])
+
+function hasBlockingTaskMeta(projectId) {
+  if (!projectId) return false
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TASK_META_STORAGE_KEY) || '{}')
+    const meta = parsed?.[projectId]
+    if (!meta) return false
+
+    const status = meta.status || 'pending'
+    if (status === 'completed') return false
+    if (ACTIVE_TASK_STATUSES.has(status)) return true
+    if (status === 'failed' || status === 'dead' || status === 'cancelled') return true
+
+    const updatedAt = Number(meta.updatedAt || 0)
+    if (!updatedAt) return true
+    return (Date.now() - updatedAt) < 24 * 60 * 60 * 1000
+  } catch {
+    return false
+  }
+}
+
 // ─── 内层组件（含 Store 访问）─────────────────────────────────────
 function KnowledgeEditorInner({ kgId, kgName }) {
   const { rfNodes, rfEdges } = useKnowledgeStore()
@@ -122,8 +145,9 @@ export default function KnowledgeGraphEditor() {
     }
     getProject(kgId)
       .then(({ project }) => {
-        const status = project?.generation_status || 'completed'
-        if (status !== 'completed') {
+        const blockedByMeta = hasBlockingTaskMeta(kgId)
+        const status = project?.generation_status || (blockedByMeta ? 'generating' : 'completed')
+        if (status !== 'completed' || blockedByMeta) {
           message.warning('项目仍在生成中，暂不可进入知识图谱编辑器')
           navigate('/dashboard')
           return

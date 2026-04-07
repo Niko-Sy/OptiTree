@@ -1,5 +1,14 @@
 import { get, post } from './apiClient'
 
+function normalizeGenerationStatus(project = {}) {
+  const raw = project.generation_status || project.generationStatus || project.projectStatus
+  const status = raw || 'completed'
+  return {
+    ...project,
+    generation_status: status,
+  }
+}
+
 function normalizeListResponse(data) {
   if (Array.isArray(data)) return { list: data }
   if (Array.isArray(data?.list)) return data
@@ -10,7 +19,7 @@ function normalizeListResponse(data) {
 }
 
 function normalizeProjectResponse(data) {
-  const project = data?.project || data
+  const project = normalizeGenerationStatus(data?.project || data)
   return { ...data, project }
 }
 
@@ -23,7 +32,12 @@ export function getDashboardSummary() {
 }
 
 export function listProjects(params = {}) {
-  return get('/api/v1/projects', params).then(normalizeListResponse)
+  return get('/api/v1/projects', params)
+    .then(normalizeListResponse)
+    .then((data) => ({
+      ...data,
+      list: (data?.list || []).map((project) => normalizeGenerationStatus(project)),
+    }))
 }
 
 export function createProject(payload) {

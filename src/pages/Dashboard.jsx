@@ -1,11 +1,12 @@
 // 仪表盘页面，显示项目统计信息、项目列表和新建项目功能
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, Component } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Input, Empty, Statistic, Row, Col, Divider, Dropdown, Tabs, message, Spin } from 'antd'
+import { Button, Input, Empty, Statistic, Row, Col, Divider, Dropdown, Tabs, message, Spin, Skeleton, Tag } from 'antd'
 import {
   PlusOutlined, SearchOutlined, ApartmentOutlined,
   ProjectOutlined, FundOutlined, ApiOutlined,
-  UploadOutlined, ThunderboltOutlined, DownOutlined,
+  UploadOutlined, ThunderboltOutlined, DownOutlined, ClockCircleOutlined,
+  CheckCircleOutlined, CloseCircleOutlined, SyncOutlined,
 } from '@ant-design/icons'
 import ProjectCard from '../components/dashboard/ProjectCard'
 import NewProjectModal from '../components/dashboard/NewProjectModal'
@@ -15,12 +16,48 @@ import UserAvatar from '../components/common/UserAvatar'
 import {
   getDashboardSummary, listProjects, createProject, deleteProject,
 } from '../services/projectService'
-import { importFaultTree } from '../services/faultTreeService'
+import { importFaultTree, getFaultTreeGraph } from '../services/faultTreeService'
+import { getKnowledgeGraph } from '../services/knowledgeGraphService'
 import { createTaskWsManager } from '../services/wsTaskService'
 import { tokenStore } from '../services/apiClient'
 import { generateFaultTree, generateKnowledgeGraph } from '../services/aiService'
 
 const TASK_META_STORAGE_KEY = 'optitree_ai_task_meta'
+const GENERATING_PROJECT_STATUSES = new Set(['pending_generating', 'generating'])
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'processing', 'retrying', 'queued', 'dispatching', 'accepted', 'parsing', 'producer_queued', 'waiting_project_slot', 'dispatch_retrying', 'enqueued', 'generating'])
+const FAILED_TASK_STATUSES = new Set(['failed', 'dead', 'cancelled'])
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'dead', 'cancelled'])
+
+function clampProgress(progress, fallback = 0) {
+  const next = Number.isFinite(progress) ? progress : fallback
+  return Math.max(0, Math.min(100, Math.round(next)))
+}
+
+function normalizeTaskType(type) {
+  if (type === 'knowledge' || type === 'kg') return 'kg'
+  return 'ft'
+}
+
+function toTimeLabel(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function toUpdatedMs(value) {
+  if (!value) return 0
+  const date = new Date(value)
+  const ms = date.getTime()
+  return Number.isFinite(ms) ? ms : 0
+}
+
+function getTaskBucket(status) {
+  if (ACTIVE_TASK_STATUSES.has(status)) return 'active'
+  if (status === 'completed') return 'completed'
+  if (FAILED_TASK_STATUSES.has(status)) return 'failed'
+  return 'other'
+}
 
 function loadTaskMetaCache() {
   try {
@@ -95,9 +132,14 @@ export default function Dashboard() {
   const [showKgModal, setShowKgModal] = useState(false)
   const [docUploadTarget, setDocUploadTarget] = useState(null) // 'faultTree' | 'knowledge' | null
   const [taskMetaByProject, setTaskMetaByProject] = useState(loadTaskMetaCache)
-  const [progressByProject, setProgressByProject] = useState({})
+  const [taskRuntimeByProject, setTaskRuntimeByProject] = useState({})
+  const [taskStatusFilter, setTaskStatusFilter] = useState('active')
+  const [taskTypeFilter, setTaskTypeFilter] = useState('all')
+  const [taskKeyword, setTaskKeyword] = useState('')
+  const [focusedProjectId, setFocusedProjectId] = useState('')
   const [retryingProjectId, setRetryingProjectId] = useState('')
   const wsManagersRef = useRef({})
+  const terminalNotifiedRef = useRef(new Set())
 
   useEffect(() => {
     localStorage.setItem(TASK_META_STORAGE_KEY, JSON.stringify(taskMetaByProject))
@@ -159,59 +201,203 @@ export default function Dashboard() {
     }
   }
 
-  // ─── 文档上传完成后（AI 生成，仍为 mock）────────────────────
-  function updateProjectProgress(projectId, payload) {
-    setProgressByProject(prev => ({
-      ...prev,
-      [projectId]: {
-        progress: payload.progress ?? prev[projectId]?.progress ?? 0,
-        stageLabel: payload.stageLabel ?? prev[projectId]?.stageLabel,
-      },
-    }))
-  }
+  const updateTaskRuntime = useCallback((projectId, payload = {}) => {
+    if (!projectId) return
+    setTaskRuntimeByProject(prev => {
+      const before = prev[projectId] || {}
+      const nextStatus = payload.status || before.status || 'processing'
+      const fallbackProgress = nextStatus === 'completed' ? 100 : (before.progress ?? 0)
+      const nextUpdatedAt = payload.updatedAt || before.updatedAt || new Date().toISOString()
+      const nextStageLabel = payload.stageLabel || before.stageLabel || (nextStatus === 'completed' ? '生成完成' : '正在生成中...')
+      const shouldAppendStage = Boolean(nextStageLabel)
+        && nextStageLabel !== before.stageLabel
+      const stageHistory = shouldAppendStage
+        ? [...(before.stageHistory || []), { label: nextStageLabel, at: nextUpdatedAt, status: nextStatus }].slice(-6)
+        : (before.stageHistory || [])
+      const next = {
+        ...before,
+        ...payload,
+        status: nextStatus,
+        progress: clampProgress(payload.progress, fallbackProgress),
+        projectStatus: payload.projectStatus || before.projectStatus || nextStatus,
+        stageLabel: nextStageLabel,
+        updatedAt: nextUpdatedAt,
+        stageHistory,
+      }
+      return { ...prev, [projectId]: next }
+    })
+  }, [])
 
-  const bindTaskWs = useCallback((projectId, taskId) => {
+  const pushBrowserNotification = useCallback((title, body = '') => {
+    if (typeof window === 'undefined') return
+    if (!('Notification' in window)) return
+    if (document.visibilityState === 'visible') return
+
+    const show = () => {
+      try {
+        new Notification(title, { body, tag: 'optitree-ai-task' })
+      } catch {
+        // ignore notification errors in unsupported environments
+      }
+    }
+
+    if (Notification.permission === 'granted') {
+      show()
+      return
+    }
+
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().then((permission) => {
+        if (permission === 'granted') show()
+      }).catch(() => {
+        // ignore permission errors
+      })
+    }
+  }, [])
+
+  const notifyTerminalOnce = useCallback((taskId, status, errorMessage) => {
+    if (!taskId || terminalNotifiedRef.current.has(taskId)) return
+    terminalNotifiedRef.current.add(taskId)
+
+    if (status === 'completed') {
+      message.success('AI 生成完成，项目现可进入编辑器')
+      pushBrowserNotification('OptiTree AI 任务已完成', '项目已生成完成，可进入编辑器查看。')
+      return
+    }
+    if (FAILED_TASK_STATUSES.has(status)) {
+      message.error(errorMessage || 'AI 生成失败，请重试')
+      pushBrowserNotification('OptiTree AI 任务失败', errorMessage || '任务生成失败，请返回仪表盘重试。')
+    }
+  }, [pushBrowserNotification])
+
+  const prefetchGeneratedGraph = useCallback(async (projectId, taskType) => {
+    if (!projectId) return
+    if (normalizeTaskType(taskType) === 'kg') {
+      await getKnowledgeGraph(projectId)
+      return
+    }
+    await getFaultTreeGraph(projectId)
+  }, [])
+
+  const bindTaskWs = useCallback((projectId, taskId, taskType = 'ft') => {
     if (!projectId) return
     if (wsManagersRef.current[projectId]) {
       wsManagersRef.current[projectId].updateTask(taskId)
+      wsManagersRef.current[projectId].updateTaskType(normalizeTaskType(taskType))
       return
     }
 
     const ws = createTaskWsManager({
       projectId,
       taskId,
+      taskType: normalizeTaskType(taskType),
       token: tokenStore.getAccess(),
+      onStateChange: (wsState, details = {}) => {
+        const statePayload = { wsState }
+        if (Number.isFinite(details.retryCount)) {
+          statePayload.retryCount = details.retryCount
+        }
+        if (wsState === 'reconnecting' && Number.isFinite(details.delay)) {
+          statePayload.stageLabel = `连接中断，${Math.max(1, Math.ceil(details.delay / 1000))} 秒后重试`
+        }
+        if (wsState === 'recovering') {
+          statePayload.stageLabel = '正在执行断线兜底恢复...'
+        }
+        statePayload.updatedAt = new Date().toISOString()
+        updateTaskRuntime(projectId, statePayload)
+      },
       onEvent: (event) => {
         if (!event) return
-        if (event.event === 'task.pending' || event.event === 'task.progress') {
-          updateProjectProgress(projectId, event)
-          // 仅在 taskId 实际变化时更新，避免每次进度事件都触发 taskMetaByProject 状态更新
-          if (event.taskId) {
-            setTaskMetaByProject(prev => {
-              if (prev[projectId]?.taskId === event.taskId) return prev
-              return {
-                ...prev,
-                [projectId]: {
-                  ...prev[projectId],
-                  taskId: event.taskId,
-                  projectId,
-                },
-              }
-            })
-          }
+        const eventName = event.event || ''
+        const eventStatus = event.status || (eventName.startsWith('task.') ? eventName.slice(5) : '')
+
+        if (event.taskId) {
+          setTaskMetaByProject(prev => ({
+            ...prev,
+            [projectId]: {
+              ...prev[projectId],
+              projectId,
+              taskId: event.taskId,
+              taskType: normalizeTaskType(prev[projectId]?.taskType || taskType),
+              status: eventStatus || prev[projectId]?.status,
+              updatedAt: Date.now(),
+            },
+          }))
         }
-        if (event.event === 'task.completed') {
-          updateProjectProgress(projectId, { progress: 100, stageLabel: '已完成' })
+
+        if (eventName === 'connected') {
+          updateTaskRuntime(projectId, { wsState: 'connected' })
+          return
+        }
+
+        if (eventName === 'task.pending' || eventName === 'task.snapshot' || eventName === 'task.progress' || eventName === 'task.retrying') {
+          updateTaskRuntime(projectId, {
+            taskId: event.taskId || taskId,
+            status: eventStatus || 'processing',
+            projectStatus: event.projectStatus,
+            progress: event.progress,
+            stage: event.stage,
+            stageLabel: event.stageLabel,
+            wsState: 'connected',
+            errorMessage: '',
+            updatedAt: event.updatedAt,
+          })
+          return
+        }
+
+        if (eventName === 'task.completed') {
+          updateTaskRuntime(projectId, {
+            taskId: event.taskId || taskId,
+            status: 'completed',
+            progress: 100,
+            stage: event.stage || 'completed',
+            stageLabel: event.stageLabel || '生成完成',
+            wsState: 'connected',
+            errorMessage: '',
+            updatedAt: event.updatedAt,
+          })
+          notifyTerminalOnce(event.taskId || taskId, 'completed')
           setTaskMetaByProject(prev => {
             const next = { ...prev }
             delete next[projectId]
             return next
           })
-          loadData()
+          prefetchGeneratedGraph(projectId, taskType)
+            .catch(() => {
+              message.warning('任务已完成，图数据同步稍后重试')
+            })
+            .finally(() => {
+              loadData()
+            })
           ws.disconnect()
           delete wsManagersRef.current[projectId]
+          return
         }
-        if (event.event === 'task.failed' || event.event === 'task.cancelled') {
+
+        if (eventName === 'task.failed' || eventName === 'task.dead' || eventName === 'task.cancelled') {
+          const failedStatus = eventStatus || 'failed'
+          updateTaskRuntime(projectId, {
+            taskId: event.taskId || taskId,
+            status: failedStatus,
+            stage: event.stage || failedStatus,
+            stageLabel: event.stageLabel || '生成失败',
+            progress: event.progress,
+            wsState: 'closed',
+            errorMessage: event.errorMessage || '',
+            updatedAt: event.updatedAt,
+          })
+          notifyTerminalOnce(event.taskId || taskId, failedStatus, event.errorMessage)
+          setTaskMetaByProject(prev => ({
+            ...prev,
+            [projectId]: {
+              ...prev[projectId],
+              projectId,
+              taskId: event.taskId || prev[projectId]?.taskId,
+              taskType: normalizeTaskType(prev[projectId]?.taskType || taskType),
+              status: failedStatus,
+              updatedAt: Date.now(),
+            },
+          }))
           loadData()
           ws.disconnect()
           delete wsManagersRef.current[projectId]
@@ -220,26 +406,37 @@ export default function Dashboard() {
     })
 
     wsManagersRef.current[projectId] = ws
+    updateTaskRuntime(projectId, { wsState: 'connecting', taskId, status: taskId ? 'pending' : 'processing' })
     ws.connect()
-  }, [loadData])
+  }, [loadData, notifyTerminalOnce, prefetchGeneratedGraph, updateTaskRuntime])
 
   async function handleDocUploadComplete(result) {
     setDocUploadTarget(null)
     try {
       if (result?.projectId && result?.taskId) {
+        const taskType = normalizeTaskType(result.target)
         setTaskMetaByProject(prev => ({
           ...prev,
           [result.projectId]: {
             projectId: result.projectId,
             taskId: result.taskId,
+            taskType,
+            status: result.status || 'pending',
             target: result.target,
             retryPayload: result.retryPayload,
             updatedAt: Date.now(),
           },
         }))
-        updateProjectProgress(result.projectId, { progress: 1, stageLabel: '任务已创建' })
+        updateTaskRuntime(result.projectId, {
+          taskId: result.taskId,
+          status: result.status || 'pending',
+          progress: 1,
+          stageLabel: '任务已创建，等待调度...',
+          wsState: 'connecting',
+          updatedAt: new Date().toISOString(),
+        })
         await loadData()
-        bindTaskWs(result.projectId, result.taskId)
+        bindTaskWs(result.projectId, result.taskId, taskType)
         message.success('已创建 AI 生成任务，项目卡片将实时更新进度')
       }
     } catch (err) {
@@ -270,11 +467,21 @@ export default function Dashboard() {
           ...prev[project.id],
           projectId: project.id,
           taskId: data.taskId,
+          taskType: payload.type,
+          status: data.status || 'pending',
           updatedAt: Date.now(),
         },
       }))
-      updateProjectProgress(project.id, { progress: 1, stageLabel: '重试任务已创建' })
-      bindTaskWs(project.id, data.taskId)
+      updateTaskRuntime(project.id, {
+        taskId: data.taskId,
+        status: data.status || 'pending',
+        progress: 1,
+        stageLabel: '重试任务已创建，等待调度...',
+        wsState: 'connecting',
+        errorMessage: '',
+        updatedAt: new Date().toISOString(),
+      })
+      bindTaskWs(project.id, data.taskId, payload.type)
       await loadData()
       message.success('已重新发起生成任务')
     } catch (err) {
@@ -287,6 +494,7 @@ export default function Dashboard() {
   useEffect(() => {
     const allProjects = [...projects, ...kgList]
     const activeProjects = new Set(allProjects.map((project) => project.id))
+    const projectMap = new Map(allProjects.map((project) => [project.id, project]))
 
     // 移除不存在项目的历史任务缓存
     setTaskMetaByProject(prev => {
@@ -302,11 +510,51 @@ export default function Dashboard() {
       return changed ? next : prev
     })
 
-    allProjects.forEach((project) => {
-      if (!['pending_generating', 'generating'].includes(project.generation_status)) return
-      bindTaskWs(project.id, taskMetaByProject[project.id]?.taskId)
+    setTaskRuntimeByProject(prev => {
+      const next = {}
+      let changed = false
+      Object.entries(prev).forEach(([projectId, runtime]) => {
+        if (!activeProjects.has(projectId)) {
+          changed = true
+          return
+        }
+        const project = projectMap.get(projectId)
+        const meta = taskMetaByProject[projectId]
+        const isProjectGenerating = GENERATING_PROJECT_STATUSES.has(project?.generation_status)
+        const isRuntimeActive = ACTIVE_TASK_STATUSES.has(runtime?.status)
+        const keepRuntime = Boolean(meta?.taskId) || isProjectGenerating || isRuntimeActive || FAILED_TASK_STATUSES.has(runtime?.status)
+        if (!keepRuntime) {
+          changed = true
+          return
+        }
+        next[projectId] = runtime
+      })
+      return changed ? next : prev
     })
-  }, [projects, kgList, taskMetaByProject, bindTaskWs])
+
+    allProjects.forEach((project) => {
+      const meta = taskMetaByProject[project.id]
+      const runtime = taskRuntimeByProject[project.id]
+      const shouldTrack = Boolean(meta?.taskId)
+        || GENERATING_PROJECT_STATUSES.has(project.generation_status)
+        || (runtime?.wsState && !TERMINAL_TASK_STATUSES.has(runtime?.status))
+      if (!shouldTrack) return
+
+      const taskType = normalizeTaskType(meta?.taskType || project.type)
+      const nextTaskId = meta?.taskId
+      bindTaskWs(project.id, nextTaskId, taskType)
+
+      if (!taskRuntimeByProject[project.id]) {
+        updateTaskRuntime(project.id, {
+          taskId: nextTaskId,
+          status: meta?.status || 'processing',
+          progress: 5,
+          stageLabel: '正在生成中...',
+          updatedAt: new Date().toISOString(),
+        })
+      }
+    })
+  }, [projects, kgList, taskMetaByProject, taskRuntimeByProject, bindTaskWs, updateTaskRuntime])
 
   useEffect(() => () => {
     Object.values(wsManagersRef.current).forEach((ws) => ws.disconnect())
@@ -370,6 +618,100 @@ export default function Dashboard() {
   const kgFiltered = kgList.filter(k =>
     k.name.toLowerCase().includes(search.toLowerCase())
   )
+
+  const projectMap = useMemo(() => {
+    const map = new Map()
+    ;[...projects, ...kgList].forEach((project) => {
+      map.set(project.id, project)
+    })
+    return map
+  }, [projects, kgList])
+
+  const taskRows = useMemo(() => {
+    const now = Date.now()
+    const ids = new Set([
+      ...Object.keys(taskRuntimeByProject),
+      ...Object.keys(taskMetaByProject),
+    ])
+
+    const rows = []
+    ids.forEach((projectId) => {
+      const runtime = taskRuntimeByProject[projectId] || {}
+      const meta = taskMetaByProject[projectId] || {}
+      const project = projectMap.get(projectId)
+
+      const status = runtime.status
+        || meta.status
+        || (GENERATING_PROJECT_STATUSES.has(project?.generation_status) ? 'processing' : '')
+      if (!status) return
+
+      const bucket = getTaskBucket(status)
+      const updatedAt = runtime.updatedAt
+        || (meta.updatedAt ? new Date(meta.updatedAt).toISOString() : '')
+        || project?.updatedAt
+        || ''
+      const updatedMs = toUpdatedMs(updatedAt)
+      const inRecentWindow = now - updatedMs <= 24 * 60 * 60 * 1000
+      if (bucket !== 'active' && !inRecentWindow) return
+
+      const taskType = normalizeTaskType(meta.taskType || project?.type || runtime.taskType)
+
+      rows.push({
+        projectId,
+        projectName: project?.name || '未命名项目',
+        projectKind: taskType === 'kg' ? '知识图谱' : '故障树',
+        taskId: runtime.taskId || meta.taskId || '',
+        taskType,
+        status,
+        bucket,
+        progress: clampProgress(runtime.progress, bucket === 'completed' ? 100 : 0),
+        stageLabel: runtime.stageLabel || (bucket === 'failed' ? '生成失败' : bucket === 'completed' ? '生成完成' : '正在生成中...'),
+        stageHistory: Array.isArray(runtime.stageHistory) ? runtime.stageHistory : [],
+        wsState: runtime.wsState || 'idle',
+        retryCount: runtime.retryCount || 0,
+        errorMessage: runtime.errorMessage || '',
+        updatedAt,
+        updatedMs,
+      })
+    })
+
+    return rows.sort((a, b) => b.updatedMs - a.updatedMs)
+  }, [taskRuntimeByProject, taskMetaByProject, projectMap])
+
+  const taskCounts = useMemo(() => {
+    return taskRows.reduce((acc, row) => {
+      acc.all += 1
+      if (row.bucket === 'active') acc.active += 1
+      if (row.bucket === 'completed') acc.completed += 1
+      if (row.bucket === 'failed') acc.failed += 1
+      return acc
+    }, { all: 0, active: 0, completed: 0, failed: 0 })
+  }, [taskRows])
+
+  const filteredTaskRows = useMemo(() => {
+    const keyword = taskKeyword.trim().toLowerCase()
+    return taskRows.filter((row) => {
+      if (taskStatusFilter !== 'all' && row.bucket !== taskStatusFilter) return false
+      if (taskTypeFilter !== 'all' && row.taskType !== taskTypeFilter) return false
+      if (!keyword) return true
+      return row.projectName.toLowerCase().includes(keyword) || row.taskId.toLowerCase().includes(keyword)
+    })
+  }, [taskRows, taskStatusFilter, taskTypeFilter, taskKeyword])
+
+  const locateProjectFromTask = useCallback((row) => {
+    const project = projectMap.get(row.projectId)
+    if (!project) return
+
+    setActiveTab(project.type === 'kg' ? 'kg' : 'ft')
+    setFocusedProjectId(row.projectId)
+    window.setTimeout(() => {
+      const target = document.getElementById(`project-card-${row.projectId}`)
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 80)
+    window.setTimeout(() => {
+      setFocusedProjectId((prev) => (prev === row.projectId ? '' : prev))
+    }, 2600)
+  }, [projectMap])
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -441,8 +783,25 @@ export default function Dashboard() {
         </Row>
         </Spin>
 
+        <SectionErrorBoundary title="任务面板加载失败，请点击重试">
+          <TaskCenterPanel
+            rows={filteredTaskRows}
+            loading={listLoading}
+            statusFilter={taskStatusFilter}
+            onStatusFilterChange={setTaskStatusFilter}
+            typeFilter={taskTypeFilter}
+            onTypeFilterChange={setTaskTypeFilter}
+            keyword={taskKeyword}
+            onKeywordChange={setTaskKeyword}
+            counts={taskCounts}
+            onLocate={locateProjectFromTask}
+          />
+        </SectionErrorBoundary>
+
+        
+
         {/* Project List Header */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 mt-4">
           <h2 className="text-lg font-semibold text-gray-800">我的工作区</h2>
           <Input
             prefix={<SearchOutlined className="text-gray-400" />}
@@ -456,6 +815,8 @@ export default function Dashboard() {
 
         <Divider style={{ margin: '0 0 0' }} />
 
+        
+
         {/* Tabs */}
         <Tabs
           activeKey={activeTab}
@@ -467,7 +828,9 @@ export default function Dashboard() {
               children: (
                 <ProjectGrid
                   items={ftFiltered}
-                  progressByProject={progressByProject}
+                  taskRuntimeByProject={taskRuntimeByProject}
+                  loading={listLoading}
+                  highlightedProjectId={focusedProjectId}
                   retryingProjectId={retryingProjectId}
                   search={search}
                   onDelete={handleDeleteProject}
@@ -484,7 +847,9 @@ export default function Dashboard() {
               children: (
                 <ProjectGrid
                   items={kgFiltered}
-                  progressByProject={progressByProject}
+                  taskRuntimeByProject={taskRuntimeByProject}
+                  loading={listLoading}
+                  highlightedProjectId={focusedProjectId}
                   retryingProjectId={retryingProjectId}
                   search={search}
                   onDelete={handleDeleteKg}
@@ -526,10 +891,35 @@ export default function Dashboard() {
 }
 
 // ─── 通用项目网格组件 ─────────────────────────────────────────────
-function ProjectGrid({ items, progressByProject, retryingProjectId, search, onDelete, onRetry, onNew, emptyText, newLabel, newColor = 'blue' }) {
+function ProjectGrid({
+  items,
+  taskRuntimeByProject,
+  highlightedProjectId,
+  loading,
+  retryingProjectId,
+  search,
+  onDelete,
+  onRetry,
+  onNew,
+  emptyText,
+  newLabel,
+  newColor = 'blue',
+}) {
   const hoverCls = newColor === 'purple'
     ? 'hover:border-purple-400 hover:bg-purple-50 hover:text-purple-500'
     : 'hover:border-blue-400 hover:bg-blue-50 hover:text-blue-500'
+
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
+        {Array.from({ length: 6 }).map((_, idx) => (
+          <div key={idx} className="bg-white rounded-xl border border-gray-100 p-4">
+            <Skeleton active title={{ width: '60%' }} paragraph={{ rows: 4 }} />
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   if (items.length > 0) {
     return (
@@ -537,9 +927,12 @@ function ProjectGrid({ items, progressByProject, retryingProjectId, search, onDe
         {items.map(p => (
           <ProjectCard
             key={p.id}
+            cardId={`project-card-${p.id}`}
+            highlighted={highlightedProjectId === p.id}
             project={p}
             onDelete={onDelete}
-            taskProgress={progressByProject?.[p.id]?.progress}
+            taskProgress={taskRuntimeByProject?.[p.id]?.progress}
+            taskInfo={taskRuntimeByProject?.[p.id]}
             onRetry={onRetry}
             retryLoading={retryingProjectId === p.id}
           />
@@ -577,6 +970,173 @@ function ProjectGrid({ items, progressByProject, retryingProjectId, search, onDe
           </div>
         }
       />
+    </div>
+  )
+}
+
+class SectionErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false })
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children
+
+    return (
+      <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 flex items-center justify-between">
+        <p className="text-sm text-red-600">{this.props.title || '模块加载失败'}</p>
+        <Button size="small" danger ghost onClick={this.handleRetry}>重试</Button>
+      </div>
+    )
+  }
+}
+
+function TaskCenterPanel({
+  rows,
+  loading,
+  statusFilter,
+  onStatusFilterChange,
+  typeFilter,
+  onTypeFilterChange,
+  keyword,
+  onKeywordChange,
+  counts,
+  onLocate,
+}) {
+  const statusOptions = [
+    { key: 'active', label: '运行中', icon: <SyncOutlined spin /> },
+    { key: 'completed', label: '已完成', icon: <CheckCircleOutlined /> },
+    { key: 'failed', label: '失败', icon: <CloseCircleOutlined /> },
+    { key: 'all', label: '全部', icon: <ClockCircleOutlined /> },
+  ]
+
+  const typeOptions = [
+    { key: 'all', label: '全部类型' },
+    { key: 'ft', label: '故障树' },
+    { key: 'kg', label: '知识图谱' },
+  ]
+
+  return (
+    <div className="mt-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-base font-semibold text-gray-800 m-0">任务中心</h3>
+          <Tag color="blue" className="m-0">{counts.all} 条</Tag>
+          <Tag color="processing" className="m-0">运行中 {counts.active}</Tag>
+          <Tag color="success" className="m-0">已完成 {counts.completed}</Tag>
+          <Tag color="error" className="m-0">失败 {counts.failed}</Tag>
+        </div>
+        <Input
+          allowClear
+          value={keyword}
+          onChange={(e) => onKeywordChange(e.target.value)}
+          placeholder="搜索项目名或任务ID"
+          prefix={<SearchOutlined className="text-gray-400" />}
+          style={{ width: 260 }}
+          size="small"
+        />
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {statusOptions.map((item) => (
+          <Button
+            key={item.key}
+            size="small"
+            type={statusFilter === item.key ? 'primary' : 'default'}
+            icon={item.icon}
+            onClick={() => onStatusFilterChange(item.key)}
+          >
+            {item.label}
+          </Button>
+        ))}
+        <Divider type="vertical" style={{ margin: '0 6px' }} />
+        {typeOptions.map((item) => (
+          <Button
+            key={item.key}
+            size="small"
+            type={typeFilter === item.key ? 'primary' : 'default'}
+            ghost={typeFilter === item.key}
+            onClick={() => onTypeFilterChange(item.key)}
+          >
+            {item.label}
+          </Button>
+        ))}
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {loading && rows.length === 0 && (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, idx) => (
+              <div key={idx} className="border border-gray-100 rounded-lg p-3">
+                <Skeleton active title={{ width: '55%' }} paragraph={{ rows: 2 }} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!loading && rows.length === 0 && (
+          <div className="bg-gray-50 rounded-lg py-8">
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span className="text-gray-500">当前筛选条件下暂无任务</span>}
+            />
+          </div>
+        )}
+
+        {rows.map((row) => {
+          const progressColor = row.bucket === 'failed' ? '#ff4d4f' : row.bucket === 'completed' ? '#52c41a' : '#1677ff'
+          return (
+            <button
+              key={`${row.projectId}-${row.taskId || row.updatedAt}`}
+              type="button"
+              onClick={() => onLocate(row)}
+              className="w-full text-left border border-gray-100 hover:border-blue-300 hover:bg-blue-50/40 rounded-lg p-3 transition-colors"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate m-0">{row.projectName}</p>
+                  <p className="text-xs text-gray-400 m-0 mt-0.5">
+                    {row.projectKind} · {row.taskId ? `任务 ${row.taskId}` : '任务ID待同步'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {row.retryCount > 0 && <Tag color="orange" className="m-0">重连 {row.retryCount}</Tag>}
+                  <Tag color={row.bucket === 'failed' ? 'error' : row.bucket === 'completed' ? 'success' : 'processing'} className="m-0">
+                    {row.bucket === 'failed' ? '失败' : row.bucket === 'completed' ? '已完成' : '运行中'}
+                  </Tag>
+                </div>
+              </div>
+
+              <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full transition-all"
+                  style={{ width: `${row.progress}%`, backgroundColor: progressColor }}
+                />
+              </div>
+
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className="text-xs text-gray-500 truncate m-0">{row.errorMessage || row.stageLabel}</p>
+                <p className="text-xs text-gray-400 m-0 shrink-0">{toTimeLabel(row.updatedAt) || '--:--:--'}</p>
+              </div>
+
+              {row.stageHistory.length > 0 && (
+                <p className="text-[11px] text-gray-400 mt-1 mb-0 truncate">
+                  {row.stageHistory.slice(-3).map((item) => item.label).join(' -> ')}
+                </p>
+              )}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

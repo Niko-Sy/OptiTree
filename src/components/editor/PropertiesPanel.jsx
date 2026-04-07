@@ -1,7 +1,9 @@
 // 属性面板组件，显示选中节点或连线的详细属性，并允许编辑
 import { useEffect } from 'react'
 import { Form, Input, Select, Button, Alert, Empty, Divider, Tag, InputNumber, Tooltip } from 'antd'
-import { DeleteOutlined, SaveOutlined, RobotOutlined, DisconnectOutlined, InfoCircleOutlined } from '@ant-design/icons'
+
+const { TextArea } = Input
+import { DeleteOutlined, SaveOutlined, RobotOutlined, DisconnectOutlined, InfoCircleOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useEditorStore as _useRawStore, shallow } from '../../store/editorStore'
 import { useEditorActions } from '../../store/useEditorStore'
 
@@ -68,6 +70,9 @@ function NodePanel() {
       probability: selected.probability ?? null,
       width: selected.width,
       height: selected.height,
+      sourceDocName:    selected.sourceDocName    ?? '',
+      sourceDocPage:    selected.sourceDocPage    ?? null,
+      sourceDocExcerpt: selected.sourceDocExcerpt ?? '',
     })
     else form.resetFields()
   }, [selected, form])
@@ -82,6 +87,11 @@ function NodePanel() {
       }
       if (values.width  > 0)  patch.width  = values.width
       if (values.height > 0) patch.height = values.height
+      if (selected.type !== 'gate') {
+        patch.sourceDocName    = values.sourceDocName    || null
+        patch.sourceDocPage    = values.sourceDocPage    || null
+        patch.sourceDocExcerpt = values.sourceDocExcerpt || null
+      }
       updateNode(selected.id, patch)
     })
   }
@@ -90,7 +100,7 @@ function NodePanel() {
 
   return (
     <>
-      <Form form={form} layout="vertical" size="small">
+      <Form form={form} layout="vertical" size="small" className="my-form">
         <Form.Item label="ID">
           <Input value={selected.id} disabled />
         </Form.Item>
@@ -145,6 +155,32 @@ function NodePanel() {
             />
           </Form.Item>
         )}
+
+        {selected.type !== 'gate' && (
+          <>
+            <Divider style={{ margin: '8px 0' }}>
+              <span className="text-xs text-gray-400" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <FileTextOutlined /> 文档溯源
+              </span>
+            </Divider>
+            <Form.Item name="sourceDocName" label="文档名称">
+              <Input placeholder="如：液压维护手册第三版.pdf" maxLength={120} size="small" />
+            </Form.Item>
+            <Form.Item name="sourceDocPage" label="参考页码">
+              <InputNumber
+                min={1} max={9999} placeholder="页码"
+                style={{ width: '100%' }} size="small"
+              />
+            </Form.Item>
+            <Form.Item name="sourceDocExcerpt" label="原文摘录">
+              <TextArea
+                rows={3} maxLength={300} showCount
+                placeholder="相关原文片段..."
+                size="small"
+              />
+            </Form.Item>
+          </>
+        )}
       </Form>
 
       {issuesForNode.length > 0 && (
@@ -177,6 +213,19 @@ function NodePanel() {
         <div className="mt-3">
           <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">事件详情</div>
           <div className="space-y-1.5 text-xs">
+            {selected.sourceDocName && (
+              <div className="flex items-start gap-1.5">
+                <span className="text-gray-400 shrink-0">文档溯源</span>
+                <div className="flex flex-col items-end gap-0.5 min-w-0">
+                  <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }} className="truncate max-w-36" title={selected.sourceDocName}>
+                    {selected.sourceDocName}
+                  </Tag>
+                  {selected.sourceDocPage && (
+                    <span className="text-gray-500 text-xs">第 {selected.sourceDocPage} 页</span>
+                  )}
+                </div>
+              </div>
+            )}
             {selected.eventId && (
               <div className="flex justify-between">
                 <span className="text-gray-400">事件编号</span>
@@ -284,22 +333,10 @@ export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
           </div>
 
           <div className="flex-1 overflow-y-auto p-3">
-            {hasEdge ? (
-              <EdgePanel />
-            ) : hasNode ? (
-              <NodePanel />
-            ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={<span className="text-xs text-gray-400">点击节点或连线以编辑属性</span>}
-                className="mt-8"
-              />
-            )}
-
             {/* Global AI issues */}
             {aiIssues.length > 0 && (
               <>
-                <Divider style={{ margin: '12px 0' }}>
+                <Divider style={{ margin: '0 0 8px 0' }}>
                   <span className="text-xs text-gray-500 flex items-center gap-1">
                     <RobotOutlined /> AI 校验报告
                   </span>
@@ -326,6 +363,20 @@ export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
                 </div>
               </>
             )}
+
+            {hasEdge ? (
+              <EdgePanel />
+            ) : hasNode ? (
+              <NodePanel />
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={<span className="text-xs text-gray-400">点击节点或连线以编辑属性</span>}
+                className="mt-8"
+              />
+            )}
+
+            
           </div>
         </div>
       )}

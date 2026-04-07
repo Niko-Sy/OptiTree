@@ -122,6 +122,9 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
 
       const files = fileList.map(f => f.originFileObj ?? f)
       const { docIds } = await uploadDocuments(files, { quality, model })
+      if (!Array.isArray(docIds) || docIds.length === 0) {
+        throw new Error('文档上传成功但未返回可用文档 ID，请稍后重试')
+      }
 
       simulateProgress(35, 70, 350, null)
 

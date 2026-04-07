@@ -72,6 +72,13 @@ export async function uploadDocuments(files, options = {}) {
   }
 }
 
+export function getDocument(docId) {
+  return get(`/api/v1/documents/${docId}`).then((data) => ({
+    ...data,
+    document: data?.document || data,
+  }))
+}
+
 function normalizeTaskResponse(data, fallbackProjectId) {
   const task = data?.task || data?.result || data
   return {
@@ -104,6 +111,13 @@ export function getTaskStatus(taskId) {
   return get(`/api/v1/ai/tasks/${taskId}`).then((data) => ({
     ...data,
     task: data?.task || data,
+  }))
+}
+
+export function getLatestFaultTreeTask(projectId) {
+  return get(`/api/v1/ai/projects/${projectId}/tasks/latest`).then((data) => ({
+    ...data,
+    task: data?.task || null,
   }))
 }
 
