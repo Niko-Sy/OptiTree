@@ -38,6 +38,9 @@ export const useEditorStore = create((set, get) => ({
     return { ...next, ...pushHistory({ ...state, ...next }) }
   }),
 
+  // 静默更新位置和连线锚点，不写入撤销历史（用于折叠/展开后自动重排）
+  updateGraphSilent: (nodes, edges) => set(() => ({ nodes, edges })),
+
   setLayoutType: (layoutType) => set({ layoutType }),
 
   addNode: (node) => set(state => {
@@ -224,13 +227,13 @@ export function useEditorStoreLegacy() {
 export function useEditorActions() {
   // Return bound action functions directly from the store
   const {
-    setGraph, setLayoutType, addNode, updateNode, moveNode, commitMove,
+    setGraph, updateGraphSilent, setLayoutType, addNode, updateNode, moveNode, commitMove,
     deleteNode, addEdge, moveEdge, commitEdgeMove, updateEdge, deleteEdge,
     selectNode, selectEdge, deselect, setAiIssues, undo, redo,
     selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes,
   } = useEditorStore()
   return {
-    setGraph, setLayoutType, addNode, updateNode, moveNode, commitMove,
+    setGraph, updateGraphSilent, setLayoutType, addNode, updateNode, moveNode, commitMove,
     deleteNode, addEdge, moveEdge, commitEdgeMove, updateEdge, deleteEdge,
     selectNode, selectEdge, deselect, setAiIssues, undo, redo,
     selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes,

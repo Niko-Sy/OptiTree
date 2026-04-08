@@ -10,90 +10,48 @@ import dagre from 'dagre'
  *   - Phase 1: BFS from root (node with no incoming edges) → compute level for each node
  *   - Phase 2: Group nodes by level, distribute evenly horizontally
  */
-export function computeLayout(nodes, edges, canvasWidth = 900) {
+export function computeLayout(nodes, edges, canvasWidth = 900, hiddenIds = null) {
   if (!nodes || nodes.length === 0) return nodes
 
-  const NODE_W = 120
-  const NODE_H = 60
-  const H_GAP = 160   // horizontal gap between node centers
-  const V_GAP = 130   // vertical gap between levels
+  const GATE_W = 56, GATE_H = 56
+  const EVENT_W = 120, EVENT_H = 60
 
-  // Build adjacency: parentId → [childId]
-  const children = {}
-  const inDegree = {}
+  // 仅对可见节点运行 Dagre，避免隐藏节点（折叠子树）占据布局空间
+  const layoutNodes = hiddenIds && hiddenIds.size > 0
+    ? nodes.filter(n => !hiddenIds.has(n.id))
+    : nodes
+  const layoutEdges = hiddenIds && hiddenIds.size > 0
+    ? edges.filter(e => !hiddenIds.has(e.from) && !hiddenIds.has(e.to))
+    : edges
 
-  nodes.forEach(n => {
-    children[n.id] = []
-    inDegree[n.id] = 0
+  if (layoutNodes.length === 0) return nodes
+
+  const g = new dagre.graphlib.Graph()
+  g.setDefaultEdgeLabel(() => ({}))
+  g.setGraph({ rankdir: 'TB', ranksep: 80, nodesep: 40, marginx: 60, marginy: 60 })
+
+  layoutNodes.forEach(n => {
+    const w = n.width  || (n.type === 'gate' ? GATE_W  : EVENT_W)
+    const h = n.height || (n.type === 'gate' ? GATE_H  : EVENT_H)
+    g.setNode(n.id, { width: w, height: h })
+  })
+  layoutEdges.forEach(e => { if (e.from !== e.to) g.setEdge(e.from, e.to) })
+  dagre.layout(g)
+
+  // 构建可见节点新位置 map
+  const posMap = new Map()
+  layoutNodes.forEach(n => {
+    const pos = g.node(n.id)
+    const w = n.width  || (n.type === 'gate' ? GATE_W  : EVENT_W)
+    const h = n.height || (n.type === 'gate' ? GATE_H  : EVENT_H)
+    // Dagre 返回中心坐标；fault tree 用 x=中心X, y=顶部Y → y 需减去 h/2
+    posMap.set(n.id, pos
+      ? { ...n, x: pos.x, y: pos.y - h / 2, width: w, height: h }
+      : { ...n, width: w, height: h })
   })
 
-  edges.forEach(e => {
-    // convention: "from" is parent (top), "to" is child (bottom)
-    if (children[e.from] !== undefined) {
-      children[e.from].push(e.to)
-    }
-    if (inDegree[e.to] !== undefined) {
-      inDegree[e.to]++
-    }
-  })
-
-  // Find root(s) — nodes with no incoming edges
-  const roots = nodes.filter(n => inDegree[n.id] === 0).map(n => n.id)
-  const rootId = roots.length > 0 ? roots[0] : nodes[0].id
-
-  // Phase 1: BFS to compute levels
-  const levels = {}
-  const queue = [{ id: rootId, level: 0 }]
-  const visited = new Set()
-
-  while (queue.length > 0) {
-    const { id, level } = queue.shift()
-    if (visited.has(id)) continue
-    visited.add(id)
-    levels[id] = level
-
-    ;(children[id] || []).forEach(childId => {
-      if (!visited.has(childId)) {
-        queue.push({ id: childId, level: level + 1 })
-      }
-    })
-  }
-
-  // Handle orphan nodes (not reachable from root)
-  nodes.forEach(n => {
-    if (levels[n.id] === undefined) {
-      levels[n.id] = 0
-    }
-  })
-
-  // Phase 2: Group by level, assign coordinates
-  const byLevel = {}
-  nodes.forEach(n => {
-    const lv = levels[n.id]
-    if (!byLevel[lv]) byLevel[lv] = []
-    byLevel[lv].push(n.id)
-  })
-
-  const result = nodes.map(n => ({ ...n }))
-  const idToNode = {}
-  result.forEach(n => { idToNode[n.id] = n })
-
-  Object.keys(byLevel).forEach(lv => {
-    const ids = byLevel[lv]
-    const count = ids.length
-    const totalWidth = count * H_GAP
-    const startX = Math.max(canvasWidth / 2 - totalWidth / 2 + H_GAP / 2, H_GAP / 2)
-
-    ids.forEach((id, i) => {
-      const node = idToNode[id]
-      node.x = startX + i * H_GAP
-      node.y = 60 + Number(lv) * V_GAP
-      node.width = node.width || NODE_W
-      node.height = node.height || NODE_H
-    })
-  })
-
-  return result
+  // 可见节点取新位置，隐藏节点保留原坐标
+  return nodes.map(n => posMap.has(n.id) ? posMap.get(n.id) : n)
 }
 
 function buildGraph(nodes, edges) {
@@ -141,43 +99,44 @@ function bfsOrderAndLevels(nodes, edges) {
   return { order, levels }
 }
 
-export function computeHorizontalLayout(nodes, edges, canvasHeight = 800) {
+export function computeHorizontalLayout(nodes, edges, canvasHeight = 800, hiddenIds = null) {
   if (!nodes || nodes.length === 0) return nodes
 
-  const NODE_W = 120
-  const NODE_H = 60
-  const X_PAD = 100
-  const H_STEP = 220
-  const V_STEP = 130
+  const GATE_W = 56, GATE_H = 56
+  const EVENT_W = 120, EVENT_H = 60
 
-  const { levels } = bfsOrderAndLevels(nodes, edges)
-  const byLevel = {}
-  nodes.forEach(n => {
-    const lv = levels[n.id] ?? 0
-    if (!byLevel[lv]) byLevel[lv] = []
-    byLevel[lv].push(n.id)
+  const layoutNodes = hiddenIds && hiddenIds.size > 0
+    ? nodes.filter(n => !hiddenIds.has(n.id))
+    : nodes
+  const layoutEdges = hiddenIds && hiddenIds.size > 0
+    ? edges.filter(e => !hiddenIds.has(e.from) && !hiddenIds.has(e.to))
+    : edges
+
+  if (layoutNodes.length === 0) return nodes
+
+  const g = new dagre.graphlib.Graph()
+  g.setDefaultEdgeLabel(() => ({}))
+  g.setGraph({ rankdir: 'LR', ranksep: 100, nodesep: 40, marginx: 60, marginy: 60 })
+
+  layoutNodes.forEach(n => {
+    const w = n.width  || (n.type === 'gate' ? GATE_W  : EVENT_W)
+    const h = n.height || (n.type === 'gate' ? GATE_H  : EVENT_H)
+    g.setNode(n.id, { width: w, height: h })
+  })
+  layoutEdges.forEach(e => { if (e.from !== e.to) g.setEdge(e.from, e.to) })
+  dagre.layout(g)
+
+  const posMap = new Map()
+  layoutNodes.forEach(n => {
+    const pos = g.node(n.id)
+    const w = n.width  || (n.type === 'gate' ? GATE_W  : EVENT_W)
+    const h = n.height || (n.type === 'gate' ? GATE_H  : EVENT_H)
+    posMap.set(n.id, pos
+      ? { ...n, x: pos.x, y: pos.y - h / 2, width: w, height: h }
+      : { ...n, width: w, height: h })
   })
 
-  const result = nodes.map(n => ({ ...n }))
-  const idToNode = {}
-  result.forEach(n => { idToNode[n.id] = n })
-
-  Object.keys(byLevel).forEach(lv => {
-    const ids = byLevel[lv]
-    const count = ids.length
-    const totalHeight = count * V_STEP
-    const startY = Math.max(canvasHeight / 2 - totalHeight / 2 + V_STEP / 2, 60)
-
-    ids.forEach((id, i) => {
-      const node = idToNode[id]
-      node.x = X_PAD + Number(lv) * H_STEP
-      node.y = startY + i * V_STEP
-      node.width = node.width || NODE_W
-      node.height = node.height || NODE_H
-    })
-  })
-
-  return result
+  return nodes.map(n => posMap.has(n.id) ? posMap.get(n.id) : n)
 }
 
 export function computeGridLayout(nodes, edges) {

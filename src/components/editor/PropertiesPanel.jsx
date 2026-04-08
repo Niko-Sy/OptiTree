@@ -100,10 +100,85 @@ function NodePanel() {
 
   return (
     <>
+      {/* Extended metadata from external format import */}
+      {(selected.eventId || selected.description || selected.gateType ||
+        (selected.rules && selected.rules.length > 0) || selected.investigateMethod) && (
+        <div className="mt-0 mb-2">
+          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">事件详情</div>
+          <div className="space-y-2.5 text-xs">
+            {selected.sourceDocName && (
+              <div className="flex items-start gap-1.5">
+                <span className="text-gray-400 shrink-0">文档溯源</span>
+                <div className="flex flex-col items-end gap-0.5 min-w-0">
+                  <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }} className="truncate max-w-36" title={selected.sourceDocName}>
+                    {selected.sourceDocName}
+                  </Tag>
+                  {selected.sourceDocPage && (
+                    <span className="text-gray-500 text-xs">第 {selected.sourceDocPage} 页</span>
+                  )}
+                </div>
+              </div>
+            )}
+            {selected.eventId && (
+              <div className="flex justify-between">
+                <span className="text-blue-500 px-1.5 pb-0.5 rounded-sm bg-blue-100">事件编号</span>
+                <span className="font-mono text-gray-600 truncate max-w-32" title={selected.eventId}>{selected.eventId}</span>
+              </div>
+            )}
+            {selected.gateType && (
+              <div className="flex justify-between">
+                <span className="text-blue-500 px-1.5 pb-0.5 rounded-sm bg-blue-100">逻辑门</span>
+                <span className="font-semibold text-blue-600">{selected.gateType}</span>
+              </div>
+            )}
+            {selected.errorLevel && (
+              <div className="flex justify-between">
+                <span className="text-blue-500 px-1.5 pb-0.5 rounded-sm bg-blue-100">错误等级</span>
+                <span className="text-gray-600">{selected.errorLevel}</span>
+              </div>
+            )}
+            {selected.priority > 0 && (
+              <div className="flex justify-between">
+                <span className="text-blue-500 px-1.5 pb-0.5 rounded-sm bg-blue-100">优先级</span>
+                <span className="text-gray-600">{selected.priority}</span>
+              </div>
+            )}
+            {selected.description && (
+              <div>
+                <span className="text-blue-500 px-1.5 pb-0.5 rounded-sm bg-blue-100">描述</span>
+                <p className="mt-1 text-gray-600 wrap-break-word">{selected.description}</p>
+              </div>
+            )}
+            {selected.investigateMethod && (
+              <div>
+                <span className="text-blue-500 px-1.5 pb-0.5 rounded-sm bg-blue-100">排查方法</span>
+                <p className="mt-1 text-gray-600 wrap-break-word">{selected.investigateMethod}</p>
+              </div>
+            )}
+            {selected.rules && selected.rules.length > 0 && (
+              <div>
+                <span className="text-gray-400">告警规则（{selected.rules.length} 条）</span>
+                <div className="mt-1 space-y-1">
+                  {selected.rules.map((rule, i) => (
+                    <div key={i} className="bg-gray-50 rounded p-1.5 text-gray-600 font-mono text-xs break-all">
+                      {rule.measurePointName}
+                      {rule.symbol && rule.thresholds?.length > 0
+                        ? ` ${rule.symbol} ${rule.thresholds.join(', ')}`
+                        : ''}
+                      {rule.duration ? ` 持续 ${rule.duration}s` : ''}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <Form form={form} layout="vertical" size="small" className="my-form">
-        <Form.Item label="ID">
+        {/* <Form.Item label="ID">
           <Input value={selected.id} disabled />
-        </Form.Item>
+        </Form.Item> */}
         {selected.type === 'gate' ? (
           <Form.Item label="门类型" name="name" rules={[{ required: true, message: '请选择门类型' }]}>
             <Select options={GATE_TYPE_OPTIONS} />
@@ -174,7 +249,7 @@ function NodePanel() {
             </Form.Item>
             <Form.Item name="sourceDocExcerpt" label="原文摘录">
               <TextArea
-                rows={3} maxLength={300} showCount
+                rows={3} maxLength={300} 
                 placeholder="相关原文片段..."
                 size="small"
               />
@@ -207,80 +282,7 @@ function NodePanel() {
         </Button>
       </div>
 
-      {/* Extended metadata from external format import */}
-      {(selected.eventId || selected.description || selected.gateType ||
-        (selected.rules && selected.rules.length > 0) || selected.investigateMethod) && (
-        <div className="mt-3">
-          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">事件详情</div>
-          <div className="space-y-1.5 text-xs">
-            {selected.sourceDocName && (
-              <div className="flex items-start gap-1.5">
-                <span className="text-gray-400 shrink-0">文档溯源</span>
-                <div className="flex flex-col items-end gap-0.5 min-w-0">
-                  <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }} className="truncate max-w-36" title={selected.sourceDocName}>
-                    {selected.sourceDocName}
-                  </Tag>
-                  {selected.sourceDocPage && (
-                    <span className="text-gray-500 text-xs">第 {selected.sourceDocPage} 页</span>
-                  )}
-                </div>
-              </div>
-            )}
-            {selected.eventId && (
-              <div className="flex justify-between">
-                <span className="text-gray-400">事件编号</span>
-                <span className="font-mono text-gray-600 truncate max-w-32" title={selected.eventId}>{selected.eventId}</span>
-              </div>
-            )}
-            {selected.gateType && (
-              <div className="flex justify-between">
-                <span className="text-gray-400">逻辑门</span>
-                <span className="font-semibold text-blue-600">{selected.gateType}</span>
-              </div>
-            )}
-            {selected.errorLevel && (
-              <div className="flex justify-between">
-                <span className="text-gray-400">错误等级</span>
-                <span className="text-gray-600">{selected.errorLevel}</span>
-              </div>
-            )}
-            {selected.priority > 0 && (
-              <div className="flex justify-between">
-                <span className="text-gray-400">优先级</span>
-                <span className="text-gray-600">{selected.priority}</span>
-              </div>
-            )}
-            {selected.description && (
-              <div>
-                <span className="text-gray-400">描述</span>
-                <p className="mt-0.5 text-gray-600 wrap-break-word">{selected.description}</p>
-              </div>
-            )}
-            {selected.investigateMethod && (
-              <div>
-                <span className="text-gray-400">排查方法</span>
-                <p className="mt-0.5 text-gray-600 wrap-break-word">{selected.investigateMethod}</p>
-              </div>
-            )}
-            {selected.rules && selected.rules.length > 0 && (
-              <div>
-                <span className="text-gray-400">告警规则（{selected.rules.length} 条）</span>
-                <div className="mt-1 space-y-1">
-                  {selected.rules.map((rule, i) => (
-                    <div key={i} className="bg-gray-50 rounded p-1.5 text-gray-600 font-mono text-xs break-all">
-                      {rule.measurePointName}
-                      {rule.symbol && rule.thresholds?.length > 0
-                        ? ` ${rule.symbol} ${rule.thresholds.join(', ')}`
-                        : ''}
-                      {rule.duration ? ` 持续 ${rule.duration}s` : ''}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      
     </>
   )
 }

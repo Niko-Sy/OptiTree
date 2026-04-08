@@ -9,7 +9,7 @@ import {
 import { useEditorStore as _useRawStore, useEditorActions, shallow } from '../../store/editorStore'
 import { useEditorStore } from '../../store/useEditorStore'
 import { GateSymbol, GATE_CONFIG } from './GateSymbol'
-import { selectAnchorsByLayout } from '../../utils/layoutAlgorithm'
+import { selectAnchorsByLayout, computeLayout, computeHorizontalLayout } from '../../utils/layoutAlgorithm'
 
 const MIN_SCALE = 0.30
 const MAX_SCALE = 2.0
@@ -186,6 +186,39 @@ const FaultNode = memo(function FaultNode({
   )
 })
 
+// ── Smooth-step helpers ─────────────────────────────────────────
+// 竖向折线（bottom→top）：V → 圆角转折 H → V
+function buildSmoothStepV(sx, sy, ex, ey, midY) {
+  if (sx === ex) return `M ${sx} ${sy} V ${ey}`
+  const s = ex > sx ? 1 : -1
+  const r = Math.min(8, Math.abs(ex - sx) / 2, Math.abs(midY - sy), Math.abs(ey - midY))
+  if (r <= 0) return `M ${sx} ${sy} V ${midY} H ${ex} V ${ey}`
+  return [
+    `M ${sx} ${sy}`,
+    `V ${midY - r}`,
+    `Q ${sx} ${midY} ${sx + s * r} ${midY}`,
+    `H ${ex - s * r}`,
+    `Q ${ex} ${midY} ${ex} ${midY + r}`,
+    `V ${ey}`,
+  ].join(' ')
+}
+
+// 横向折线（right→left）：H → 圆角转折 V → H
+function buildSmoothStepH(sx, sy, ex, ey, midX) {
+  if (sy === ey) return `M ${sx} ${sy} H ${ex}`
+  const s = ey > sy ? 1 : -1
+  const r = Math.min(8, Math.abs(ey - sy) / 2, Math.abs(midX - sx), Math.abs(ex - midX))
+  if (r <= 0) return `M ${sx} ${sy} H ${midX} V ${ey} H ${ex}`
+  return [
+    `M ${sx} ${sy}`,
+    `H ${midX - r}`,
+    `Q ${midX} ${sy} ${midX} ${sy + s * r}`,
+    `V ${ey - s * r}`,
+    `Q ${midX} ${ey} ${midX + r} ${ey}`,
+    `H ${ex}`,
+  ].join(' ')
+}
+
 // ── Edge path string builder (pure function, reused for DOM direct-write) ──
 export function buildEdgePath(p, c, edge) {
   const fromAnchor = edge.fromAnchor || 'bottom'
@@ -193,11 +226,26 @@ export function buildEdgePath(p, c, edge) {
   const start = getAnchorPoint(p, fromAnchor)
   const end   = getAnchorPoint(c, toAnchor)
   const sx = start.x, sy = start.y, ex = end.x, ey = end.y
-  // Adaptive control-point distance: tight for close nodes, smooth for far ones
+  const bx = edge.bendX || 0, by = edge.bendY || 0
+
+  // 竖向折线（故障树默认垂直排版 bottom→top）
+  if (fromAnchor === 'bottom' && toAnchor === 'top') {
+    const midY = (sy + ey) / 2 + by
+    const d = buildSmoothStepV(sx, sy, ex, ey, midY)
+    return { d, hmx: (sx + ex) / 2, hmy: midY }
+  }
+
+  // 横向折线（水平排版 right→left）
+  if (fromAnchor === 'right' && toAnchor === 'left') {
+    const midX = (sx + ex) / 2 + bx
+    const d = buildSmoothStepH(sx, sy, ex, ey, midX)
+    return { d, hmx: midX, hmy: (sy + ey) / 2 }
+  }
+
+  // 其他方向（手动连线等）保留贝塞尔
   const dist = Math.min(160, Math.max(40, Math.hypot(ex - sx, ey - sy) * 0.42))
   const [fromDx, fromDy] = getCtrlOffset(fromAnchor, dist)
   const [toDx, toDy]     = getCtrlOffset(toAnchor, dist)
-  const bx = edge.bendX || 0, by = edge.bendY || 0
   const cp1x = sx + fromDx + bx * 0.5, cp1y = sy + fromDy + by * 0.5
   const cp2x = ex + toDx   + bx * 0.5, cp2y = ey + toDy   + by * 0.5
   const d = `M ${sx} ${sy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${ex} ${ey}`
@@ -376,7 +424,7 @@ function ContextMenu({ menu, onClose, state, deleteEdge, deleteNode, onCopy, onP
 }
 
 // ── Main Canvas ─────────────────────────────────────────────────
-export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, fitRef }) {
+export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, fitRef, hiddenIdsRef }) {
   // Fine-grained Zustand selectors — each component only re-renders when its slice changes
   const nodes            = _useRawStore(s => s.nodes, shallow)
   const edges            = _useRawStore(s => s.edges, shallow)
@@ -388,7 +436,7 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   // Build a state-like object so ContextMenu and other legacy consumers still work
   const state = { nodes, edges, selectedNodeId, selectedEdgeId, selectedNodeIds, clipboard, layoutType }
 
-  const { addNode, moveNode, commitMove, selectNode, selectEdge, deselect, addEdge, deleteEdge, deleteNode, undo, redo, moveEdge, commitEdgeMove, updateEdge, selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes } = useEditorActions()
+  const { addNode, moveNode, commitMove, selectNode, selectEdge, deselect, addEdge, deleteEdge, deleteNode, undo, redo, moveEdge, commitEdgeMove, updateEdge, selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes, updateGraphSilent, setLayoutType } = useEditorActions()
   const containerRef = useRef(null)
 
   // ── DOM ref maps for direct-write during drag (zero React re-renders) ──
@@ -406,6 +454,10 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   const [collapsedNodes, setCollapsedNodes] = useState(new Set())
   // Track whether we've done the initial "collapse all" pass
   const collapsedInitRef = useRef(false)
+  // 标记本次 collapsedNodes 变更来自用户手动操作（非初始化/图替换），用于触发自动重排
+  const manualCollapseRef = useRef(false)
+  // 记录最近手动折叠/展开的节点 ID，用于锚定视口
+  const lastToggledNodeIdRef = useRef(null)
 
   // ── 首次加载图数据时，默认收缩所有有子节点的父节点 ────────
   useEffect(() => {
@@ -447,6 +499,8 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   }, [nodes.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleCollapse = useCallback((nodeId) => {
+    manualCollapseRef.current = true
+    lastToggledNodeIdRef.current = nodeId
     setCollapsedNodes(prev => {
       const next = new Set(prev)
       if (next.has(nodeId)) next.delete(nodeId)
@@ -457,10 +511,15 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
 
   // 一键展开 / 一键收缩所有节点
   const expandAll = useCallback(() => {
+    manualCollapseRef.current = true
+    lastToggledNodeIdRef.current = null
     setCollapsedNodes(new Set())
+    setTimeout(() => fitToScreen(), 300)
   }, [])
 
   const collapseAll = useCallback(() => {
+    manualCollapseRef.current = true
+    lastToggledNodeIdRef.current = null
     const nm = {}
     stateRef.current.nodes.forEach(n => { nm[n.id] = n })
     const parentIds = new Set(
@@ -472,6 +531,7 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
         })
     )
     setCollapsedNodes(parentIds)
+    setTimeout(() => fitToScreen(), 300)
   }, [])
 
   const [connectFrom, setConnectFrom] = useState(null)
@@ -1086,6 +1146,58 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
 
   // 同步 ref，让 fitToScreen（useCallback 无依赖）始终能读到最新隐藏集合
   hiddenNodeIdsRef.current = hiddenNodeIds
+  // 同步外部 ref（供 Toolbar handleApplyLayout 读取当前隐藏集合）
+  if (hiddenIdsRef) hiddenIdsRef.current = hiddenNodeIds
+
+  // ── 折叠/展开后自动重排（仅对可见节点运行 Dagre，静默更新不写撤销历史）──
+  useEffect(() => {
+    if (!manualCollapseRef.current) return   // 跳过初始化/图替换触发的变更
+    manualCollapseRef.current = false
+
+    const { nodes: allNodes, edges: allEdges } = stateRef.current
+    if (allNodes.length === 0) return
+
+    const ltype = stateRef.current.layoutType || 'vertical'
+    // 仅对树形排版自动重排；网格/力导向跳过
+    if (ltype !== 'vertical' && ltype !== 'horizontal') return
+
+    const hiddenIds = hiddenNodeIdsRef.current   // 最新隐藏集合
+
+    // 布局前记录触发节点的屏幕锚点（节点中心）
+    const toggledId = lastToggledNodeIdRef.current
+    const anchorNode = toggledId ? allNodes.find(n => n.id === toggledId) : null
+    const { x: vtx, y: vty, scale } = vtRef.current
+    const anchorScreenX = anchorNode ? anchorNode.x * scale + vtx : null
+    const anchorScreenY = anchorNode ? (anchorNode.y + (anchorNode.height || 0) / 2) * scale + vty : null
+
+    const laid = ltype === 'horizontal'
+      ? computeHorizontalLayout(allNodes, allEdges, undefined, hiddenIds)
+      : computeLayout(allNodes, allEdges, undefined, hiddenIds)
+
+    // 更新可见边的锚点方向，隐藏边保留原样
+    const nodeMap = {}
+    laid.forEach(n => { nodeMap[n.id] = n })
+    const updatedEdges = allEdges.map(e => {
+      if (hiddenIds.has(e.from) || hiddenIds.has(e.to)) return e
+      const fromNode = nodeMap[e.from]
+      const toNode   = nodeMap[e.to]
+      if (!fromNode || !toNode) return { ...e, bendX: 0, bendY: 0 }
+      const pick = selectAnchorsByLayout(fromNode, toNode, ltype)
+      return { ...e, fromAnchor: pick.fromAnchor, toAnchor: pick.toAnchor, bendX: 0, bendY: 0 }
+    })
+
+    updateGraphSilent(laid, updatedEdges)
+
+    // 布局后反向平移视口，让触发节点保持屏幕原位
+    if (anchorNode && anchorScreenX !== null && anchorScreenY !== null) {
+      const newNode = nodeMap[toggledId]
+      if (newNode) {
+        const targetX = anchorScreenX - newNode.x * scale
+        const targetY = anchorScreenY - (newNode.y + (newNode.height || 0) / 2) * scale
+        animateTo({ x: targetX, y: targetY, scale })
+      }
+    }
+  }, [collapsedNodes]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleNodes = useMemo(
     () => nodes.filter(n => !hiddenNodeIds.has(n.id)),

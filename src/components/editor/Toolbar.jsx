@@ -116,7 +116,7 @@ function parseStandardFormat(json) {
   return { nodes, edges }
 }
 
-export default function Toolbar({ projectName = '未命名项目', canvasWidth, aiAssistantRef, fitRef }) {
+export default function Toolbar({ projectName = '未命名项目', canvasWidth, aiAssistantRef, fitRef, hiddenIdsRef }) {
   // Fine-grained selectors: Toolbar only re-renders when these slices change
   const nodes        = _useRawStore(s => s.nodes)
   const edges        = _useRawStore(s => s.edges)
@@ -252,13 +252,16 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth, 
   function handleApplyLayout(kind) {
     if (state.nodes.length === 0) { message.warning('画布为空，请先添加节点'); return }
 
+    // 读取当前隐藏节点集合（Canvas 实时写入），让 Dagre 跳过折叠子树，避免占位挤压
+    const hiddenIds = hiddenIdsRef?.current || new Set()
+
     const laid = kind === 'horizontal'
-      ? computeHorizontalLayout(state.nodes, state.edges)
+      ? computeHorizontalLayout(state.nodes, state.edges, undefined, hiddenIds)
       : kind === 'grid'
         ? computeGridLayout(state.nodes, state.edges)
         : kind === 'force'
           ? computeForceLayout(state.nodes, state.edges)
-          : computeLayout(state.nodes, state.edges, canvasWidth || 900)
+          : computeLayout(state.nodes, state.edges, canvasWidth || 900, hiddenIds)
     const layoutType = kind === 'horizontal' || kind === 'grid' || kind === 'force' ? kind : 'vertical'
     const anchoredEdges = withLayoutAnchors(laid, state.edges, layoutType)
 

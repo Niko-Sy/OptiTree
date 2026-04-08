@@ -54,6 +54,8 @@ function EditorInner({ projectId, projectName }) {
   const aiAssistantRef = useRef(null)
   // 适应屏幕引用：由 Canvas 暴露，供工具栏排版后、初始加载后自动调用
   const fitRef = useRef(null)
+  // Canvas 写入当前隐藏节点集合，Toolbar 排版时读取以跳过隐藏节点
+  const hiddenIdsRef = useRef(new Set())
   const [propsPanelCollapsed, setPropsPanelCollapsed] = useState(false)
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const rightOffset = propsPanelCollapsed ? 0 : 256
@@ -123,9 +125,10 @@ function EditorInner({ projectId, projectName }) {
         canvasWidth={canvasWidthRef.current?.() || 900}
         aiAssistantRef={aiAssistantRef}
         fitRef={fitRef}
+        hiddenIdsRef={hiddenIdsRef}
       />
       <div className="flex-1 relative overflow-hidden">
-        <Canvas onSizeRef={canvasWidthRef} rightOffset={rightOffset} leftOffset={leftOffset} fitRef={fitRef} />
+        <Canvas onSizeRef={canvasWidthRef} rightOffset={rightOffset} leftOffset={leftOffset} fitRef={fitRef} hiddenIdsRef={hiddenIdsRef} />
         <NodePalette collapsed={paletteCollapsed} onCollapsedChange={setPaletteCollapsed} />
         <PropertiesPanel collapsed={propsPanelCollapsed} onCollapsedChange={setPropsPanelCollapsed} />
       </div>
