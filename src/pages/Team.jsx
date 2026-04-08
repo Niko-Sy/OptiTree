@@ -21,6 +21,7 @@ import { useAuth } from '../store/useAuthStore'
 import UserAvatar from '../components/common/UserAvatar'
 import { listProjects } from '../services/projectService'
 import { listMembers, listVersions } from '../services/collaborationService'
+import { listTeamActivities } from '../services/notificationService'
 
 const { Text, Title } = Typography
 
@@ -47,6 +48,8 @@ export default function Team() {
   const [activeTab, setActiveTab] = useState('projects')
   const [loading, setLoading] = useState(false)
   const [enriched, setEnriched] = useState([])   // { ...project, members:[], versions:[] }
+  const [activities, setActivities] = useState([])
+  const [activitiesLoading, setActivitiesLoading] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -86,6 +89,21 @@ export default function Team() {
       }
     }
     load()
+    return () => { cancelled = true }
+  }, [])
+
+  // ── 团队动态 ─────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    setActivitiesLoading(true)
+    listTeamActivities(20)
+      .then(data => {
+        if (cancelled) return
+        const raw = data?.list || data?.activities || (Array.isArray(data) ? data : [])
+        setActivities(raw)
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setActivitiesLoading(false) })
     return () => { cancelled = true }
   }, [])
 
@@ -216,6 +234,17 @@ export default function Team() {
                 </span>
               ),
               children: <ActivityFeed versions={recentVersions} onNavigate={navigate} />,
+            },
+            {
+              key: 'teamActivities',
+              label: <span><TeamOutlined className="mr-1" />团队动态</span>,
+              children: (
+                <TeamActivityFeed
+                  activities={activities}
+                  loading={activitiesLoading}
+                  onNavigate={navigate}
+                />
+              ),
             },
           ]}
         />
@@ -367,6 +396,75 @@ function ProjectRow({ project, onNavigate }) {
           </Button>
         </div>
       </div>
+    </Card>
+  )
+}
+
+// ─── 活动类型标签 ────────────────────────────────────────────────
+const ACTIVITY_LABEL = {
+  'member.invite':        a => `邀请 ${a.targetName || a.targetEmail || '用户'} 加入`,
+  'member.invite.accept': a => `${a.targetName || a.targetEmail || '用户'} 接受了邀请`,
+  'member.invite.reject': a => `${a.targetName || a.targetEmail || '用户'} 拒绝了邀请`,
+  'member.invite.revoke': a => `撤销了对 ${a.targetName || a.targetEmail || '用户'} 的邀请`,
+  'member.role.update':   a => `将 ${a.targetName || '成员'} 的角色改为 ${ROLE_LABEL[a.newRole] || a.newRole || ''}`,
+  'member.remove':        a => `移除了成员 ${a.targetName || ''}`,
+}
+
+// ─── 团队动态面板 ────────────────────────────────────────────────
+function TeamActivityFeed({ activities, loading, onNavigate }) {
+  if (loading) {
+    return <div className="py-16 text-center"><Spin /></div>
+  }
+
+  if (activities.length === 0) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 py-16 mt-4">
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="暂无团队动态"
+        />
+      </div>
+    )
+  }
+
+  return (
+    <Card className="mt-4 shadow-sm">
+      <Timeline
+        items={activities.map((a, i) => ({
+          dot: i === 0
+            ? <Badge dot status="processing"><TeamOutlined style={{ fontSize: 12 }} /></Badge>
+            : <TeamOutlined style={{ fontSize: 12, color: '#8c8c8c' }} />,
+          children: (
+            <div className="flex items-start justify-between pb-1">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-gray-800 text-sm">
+                    {a.operatorName || a.operator_name || '操作者'}
+                  </span>
+                  <span className="text-gray-500 text-sm">
+                    {ACTIVITY_LABEL[a.type]?.(a) || a.summary || a.type}
+                  </span>
+                  {(a.projectName || a.project_name) && (
+                    <Tag
+                      color="blue"
+                      className="text-xs cursor-pointer"
+                      onClick={() => onNavigate(
+                        `/collaboration?id=${a.projectId || a.project_id}&type=${a.projectType || a.project_type || 'ft'}`
+                      )}
+                    >
+                      {a.projectName || a.project_name}
+                      <RightOutlined className="ml-1" style={{ fontSize: 9 }} />
+                    </Tag>
+                  )}
+                </div>
+                <Text className="text-xs text-gray-400">
+                  {new Date(a.createdAt || a.created_at).toLocaleString('zh-CN')}
+                </Text>
+              </div>
+            </div>
+          ),
+        }))}
+      />
     </Card>
   )
 }

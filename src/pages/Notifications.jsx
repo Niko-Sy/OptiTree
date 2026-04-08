@@ -33,6 +33,7 @@ const ROLE_LABEL = { editor: '编辑者', viewer: '查看者', admin: '管理员
 const STATUS_TAG = {
   accepted: <Tag color="success">已接受</Tag>,
   rejected: <Tag color="default">已拒绝</Tag>,
+  revoked:  <Tag color="warning">已撤销</Tag>,
 }
 
 // ─── 单条协作邀请 ─────────────────────────────────────────────────────────────
@@ -78,26 +79,29 @@ function InviteItem({ item, onAccept, onReject, onDelete, onMarkRead }) {
 
         {/* 操作区 */}
         <div className="flex items-center gap-2 mt-3">
-          {isPending ? (
-            <>
-              <Button
-                size="small"
-                type="primary"
-                onClick={(e) => { e.stopPropagation(); onAccept(item.id) }}
-              >
-                接受
-              </Button>
-              <Button
-                size="small"
-                danger
-                onClick={(e) => { e.stopPropagation(); onReject(item.id) }}
-              >
-                拒绝
-              </Button>
-            </>
-          ) : (
-            STATUS_TAG[item.status]
-          )}
+          {item.isRevoke
+            ? STATUS_TAG.revoked
+            : isPending
+              ? (
+                <>
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={(e) => { e.stopPropagation(); onAccept(item.id) }}
+                  >
+                    接受
+                  </Button>
+                  <Button
+                    size="small"
+                    danger
+                    onClick={(e) => { e.stopPropagation(); onReject(item.id) }}
+                  >
+                    拒绝
+                  </Button>
+                </>
+              )
+              : (STATUS_TAG[item.status])
+          }
           <Popconfirm
             title="确认删除这条通知？"
             okText="删除"

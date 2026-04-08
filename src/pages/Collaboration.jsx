@@ -14,13 +14,14 @@ import {
   ArrowLeftOutlined, HistoryOutlined, TeamOutlined,
   UserAddOutlined, DownloadOutlined, RollbackOutlined,
   EyeOutlined, DeleteOutlined, ApartmentOutlined, ApiOutlined,
-  ClockCircleOutlined, EditOutlined,
+  ClockCircleOutlined, EditOutlined, MailOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../store/useAuthStore'
 import UserAvatar from '../components/common/UserAvatar'
 import {
   listVersions, createVersion, rollbackVersion, deleteVersion,
   listMembers, inviteMember, updateMemberRole, removeMember,
+  queryInviteCandidate, listProjectInvitations, revokeInvitation,
 } from '../services/collaborationService'
 import { getProject } from '../services/projectService'
 import { exportFaultTree } from '../services/faultTreeService'
@@ -139,6 +140,8 @@ export default function Collaboration() {
   const [showInvite, setShowInvite]         = useState(false)
   const [inviteEmail, setInviteEmail]       = useState('')
   const [inviteRole, setInviteRole]         = useState('editor')
+  const [candidate, setCandidate]           = useState(null)
+  const [candidateLoading, setCandidateLoading] = useState(false)
 
   const loadMembers = useCallback(async () => {
     if (!projectId) return
@@ -155,16 +158,67 @@ export default function Collaboration() {
 
   useEffect(() => { loadMembers() }, [loadMembers])
 
+  // ── 邀请候选人查询（防抖 300ms）──────────────────────────────
+  useEffect(() => {
+    if (!inviteEmail.trim() || !projectId) {
+      setCandidate(null)
+      return
+    }
+    const t = setTimeout(async () => {
+      setCandidateLoading(true)
+      try {
+        const data = await queryInviteCandidate(projectId, inviteEmail.trim())
+        setCandidate(data)
+      } catch {
+        setCandidate(null)
+      } finally {
+        setCandidateLoading(false)
+      }
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [inviteEmail, projectId])
+
+  // ── 邀请记录 ────────────────────────────────────────────────
+  const [invitations, setInvitations]           = useState([])
+  const [invitationsLoading, setInvitationsLoading] = useState(false)
+
+  const loadInvitations = useCallback(async () => {
+    if (!projectId) return
+    setInvitationsLoading(true)
+    try {
+      const data = await listProjectInvitations(projectId, { status: 'pending' })
+      setInvitations(data.list || [])
+    } catch {
+      // 静默失败，面板保持空
+    } finally {
+      setInvitationsLoading(false)
+    }
+  }, [projectId])
+
+  useEffect(() => { loadInvitations() }, [loadInvitations])
+
   async function handleInvite() {
     if (!inviteEmail.trim()) { message.error('请输入邮箱'); return }
     try {
       await inviteMember(projectId, { email: inviteEmail, role: inviteRole })
       setInviteEmail('')
+      setCandidate(null)
       setShowInvite(false)
       message.success(`已发送邀请至 ${inviteEmail}`)
       loadMembers()
+      loadInvitations()
     } catch (err) {
       message.error(err?.message || '邀请失败')
+    }
+  }
+
+  async function handleRevokeInvitation(invId) {
+    try {
+      await revokeInvitation(projectId, invId)
+      message.success('邀请已撤销')
+      loadInvitations()
+    } catch (err) {
+      message.error(err?.message || '撤销失败')
     }
   }
 
@@ -208,10 +262,7 @@ export default function Collaboration() {
       return
     }
 
-    // SVG / PNG: fetch graph data then render locally
     try {
-      // Reuse the version snapshot from the latest version as source of truth,
-      // or fall back to re-fetching via the export API
       const blob = isKg
         ? await exportKnowledgeGraph(projectId)
         : await exportFaultTree(projectId)
@@ -238,6 +289,12 @@ export default function Collaboration() {
       message.error(err?.message || '导出失败')
     }
   }
+
+  // ── 邀请弹窗辅助 ─────────────────────────────────────────────
+  const cand = candidate?.candidate
+  const isAlreadyMember = cand?.alreadyMember ?? false
+  const hasPending = cand?.hasPendingInvitation ?? false
+  const inviteOkText = hasPending ? '重新发送邀请' : '发送邀请'
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -471,6 +528,49 @@ export default function Collaboration() {
                 <p>• <strong>查看者</strong>：只读浏览</p>
               </div>
             </Card>
+
+            {/* ── 邀请记录 ── */}
+            <Card
+              title={
+                <span className="font-semibold text-gray-800 flex items-center gap-2">
+                  <MailOutlined className="text-orange-400" /> 邀请记录
+                </span>
+              }
+              className="shadow-sm"
+            >
+              <Spin spinning={invitationsLoading}>
+                {invitations.length === 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无待处理邀请" />
+                ) : (
+                  <div className="space-y-2">
+                    {invitations.map(inv => (
+                      <div key={inv.id} className="flex items-center justify-between py-1">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-700 truncate">{inv.email}</p>
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <Tag color={ROLE_CONFIG[inv.role]?.color ?? 'default'} className="text-xs">
+                              {ROLE_CONFIG[inv.role]?.label ?? inv.role}
+                            </Tag>
+                            {inv.expiresAt && (
+                              <span className="text-xs text-gray-400">
+                                到期 {new Date(inv.expiresAt).toLocaleDateString('zh-CN')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <Popconfirm
+                          title="撤销此邀请？"
+                          onConfirm={() => handleRevokeInvitation(inv.id)}
+                          okType="danger" okText="撤销" cancelText="取消"
+                        >
+                          <Button type="text" size="small" danger>撤销</Button>
+                        </Popconfirm>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Spin>
+            </Card>
           </div>
         </div>
       </main>
@@ -490,10 +590,11 @@ export default function Collaboration() {
       <Modal
         open={showInvite}
         title="邀请协作成员"
-        okText="发送邀请"
+        okText={inviteOkText}
         cancelText="取消"
+        okButtonProps={{ disabled: isAlreadyMember }}
         onOk={handleInvite}
-        onCancel={() => setShowInvite(false)}
+        onCancel={() => { setShowInvite(false); setInviteEmail(''); setCandidate(null) }}
         width={400}
       >
         <div className="space-y-4 mt-4">
@@ -503,7 +604,27 @@ export default function Collaboration() {
               placeholder="colleague@example.com"
               value={inviteEmail}
               onChange={e => setInviteEmail(e.target.value)}
+              suffix={candidateLoading ? <Spin size="small" /> : null}
             />
+            {/* 候选人查询结果 */}
+            {!candidateLoading && candidate && inviteEmail.trim() && (
+              <div className="mt-1.5 text-xs">
+                {isAlreadyMember && (
+                  <span className="text-orange-500">该用户已是项目成员</span>
+                )}
+                {!isAlreadyMember && hasPending && (
+                  <span className="text-blue-500">该用户有待处理邀请，可重新发送以刷新有效期</span>
+                )}
+                {!isAlreadyMember && !hasPending && cand?.registered && (
+                  <span className="text-green-600">
+                    已找到用户：{cand.displayName || cand.username || inviteEmail}
+                  </span>
+                )}
+                {cand && !cand.registered && (
+                  <span className="text-gray-400">未找到该账号，发送后对方注册时可自动加入</span>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <label className="text-sm text-gray-600 mb-1 block">角色</label>
@@ -540,4 +661,3 @@ export default function Collaboration() {
     </div>
   )
 }
-

@@ -77,3 +77,43 @@ export function updateMemberRole(projectId, memberId, payload) {
 export function removeMember(projectId, memberId) {
   return post(`/api/v1/projects/${projectId}/members/${memberId}/remove`, {})
 }
+
+function normalizeInvitation(inv = {}) {
+  return {
+    ...inv,
+    id: inv.id || inv.invitationId || '',
+    email: inv.email || inv.inviteeEmail || '',
+    role: inv.role || 'viewer',
+    status: inv.status || 'pending',
+    expiresAt: inv.expiresAt || inv.expiredAt || null,
+    createdAt: inv.createdAt || new Date().toISOString(),
+  }
+}
+
+export function queryInviteCandidate(projectId, email) {
+  return get(`/api/v1/projects/${projectId}/members/invite-candidate`, { email })
+}
+
+export function listProjectInvitations(projectId, params = {}) {
+  return get(`/api/v1/projects/${projectId}/invitations`, params)
+    .then(normalizeListResponse)
+    .then((data) => ({ ...data, list: data.list.map(normalizeInvitation) }))
+}
+
+export function listMyInvitations(params = {}) {
+  return get(`/api/v1/users/me/invitations`, params)
+    .then(normalizeListResponse)
+    .then((data) => ({ ...data, list: data.list.map(normalizeInvitation) }))
+}
+
+export function acceptInvitation(projectId, invitationId) {
+  return post(`/api/v1/projects/${projectId}/invitations/${invitationId}/accept`, {})
+}
+
+export function rejectInvitation(projectId, invitationId) {
+  return post(`/api/v1/projects/${projectId}/invitations/${invitationId}/reject`, {})
+}
+
+export function revokeInvitation(projectId, invitationId) {
+  return post(`/api/v1/projects/${projectId}/invitations/${invitationId}/revoke`, {})
+}

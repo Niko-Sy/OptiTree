@@ -742,10 +742,10 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-8">
+      <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-4">
         {/* Stats */}
         <Spin spinning={listLoading}>
-        <Row gutter={16} className="mb-8">
+        <Row gutter={16} className="mb-4">
           <Col span={6}>
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
               <Statistic
@@ -807,7 +807,7 @@ export default function Dashboard() {
         
 
         {/* Project List Header */}
-        <div className="flex items-center justify-between mb-4 mt-4">
+        <div className="flex items-center justify-between mb-2 mt-5">
           <h2 className="text-lg font-semibold text-gray-800">我的工作区</h2>
           <Input
             prefix={<SearchOutlined className="text-gray-400" />}
@@ -1036,7 +1036,7 @@ function TaskCenterPanel({
   ]
 
   return (
-    <div className="mt-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+    <div className="mt-2 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h3 className="text-base font-semibold text-gray-800 m-0">任务中心</h3>

@@ -12,7 +12,7 @@ import { GateSymbol, GATE_CONFIG } from './GateSymbol'
 import { selectAnchorsByLayout, computeLayout, computeHorizontalLayout } from '../../utils/layoutAlgorithm'
 
 const MIN_SCALE = 0.30
-const MAX_SCALE = 2.0
+const MAX_SCALE = 1.50
 const ZOOM_STEP = 0.10
 
 const ANCHOR_KEYS = ['top', 'right', 'bottom', 'left']

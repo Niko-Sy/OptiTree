@@ -67,13 +67,21 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
   const updatedTime = toTimeLabel(taskInfo?.updatedAt)
   const stageHistory = Array.isArray(taskInfo?.stageHistory) ? taskInfo.stageHistory : []
 
-  function handleOpen(e) {
+  function openProject() {
     if (showEditModal) return
-    if (isActionElement(e?.target)) return
-    e?.stopPropagation()
     if (!canOpen) return
     if (isKg) navigate(`/knowledge?id=${project.id}`)
     else navigate(`/editor?id=${project.id}`)
+  }
+
+  function handleCardClick(e) {
+    if (isActionElement(e?.target)) return
+    openProject()
+  }
+
+  function handleOpenClick(e) {
+    e.stopPropagation()
+    openProject()
   }
 
   function handleCollaboration(e) {
@@ -106,7 +114,7 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
       id={cardId}
       className={`fade-in-up hover:shadow-md transition-shadow ${canOpen ? 'cursor-pointer' : 'cursor-not-allowed'} ${highlighted ? 'ring-2 ring-blue-400 ring-offset-1' : ''}`}
       styles={{ body: { padding: '16px' } }}
-      onClick={handleOpen}
+      onClick={handleCardClick}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -120,7 +128,7 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
                 <Tag color="purple" className="text-xs shrink-0">知识图谱</Tag>
               )}
               {!isKg && (<Tag color="blue" className="text-xs shrink-0">故障树</Tag>)}
-              <Tag color={statusMeta.color} className="text-xs shrink-0">{statusMeta.label}</Tag>
+              {statusMeta.color!=="success" && <Tag color={statusMeta.color} className="text-xs shrink-0">{statusMeta.label}</Tag>}
             </div>
             <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
               <ClockCircleOutlined />
@@ -250,7 +258,7 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
           icon={<FolderOpenOutlined />}
           className="flex-1"
           size="small"
-          onClick={handleOpen}
+          onClick={handleOpenClick}
           disabled={!canOpen}
           style={isKg ? { borderColor: '#722ed1', color: '#722ed1' } : {}}
         >
