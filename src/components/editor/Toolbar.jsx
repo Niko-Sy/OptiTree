@@ -5,7 +5,7 @@ import {
   UndoOutlined, RedoOutlined, DownloadOutlined, UploadOutlined,
   ApartmentOutlined, RobotOutlined, ArrowLeftOutlined, SaveOutlined,
   TeamOutlined, FileImageOutlined, FileSyncOutlined,
-  DownOutlined, ThunderboltOutlined,CheckOutlined
+  DownOutlined, ThunderboltOutlined,CheckOutlined, EditOutlined
 } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { saveVersion } from '../../services/aiService'
@@ -22,6 +22,7 @@ import {
 import { validateFaultTree } from '../../utils/aiValidator'
 import { buildFaultTreeSVG, downloadSvg, downloadSvgAsPng } from '../../utils/exportUtils'
 import DocumentUploadModal from '../dashboard/DocumentUploadModal'
+import UpdateProjectModal from '../common/UpdateProjectModal'
 
 const DEMO_JSON = {
   rootId: 'root',
@@ -116,7 +117,7 @@ function parseStandardFormat(json) {
   return { nodes, edges }
 }
 
-export default function Toolbar({ projectName = '未命名项目', canvasWidth, aiAssistantRef, fitRef, hiddenIdsRef }) {
+export default function Toolbar({ projectName = '未命名项目', projectId, project, onProjectUpdated, canvasWidth, aiAssistantRef, fitRef, hiddenIdsRef }) {
   // Fine-grained selectors: Toolbar only re-renders when these slices change
   const nodes        = _useRawStore(s => s.nodes)
   const edges        = _useRawStore(s => s.edges)
@@ -128,6 +129,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth, 
   const [searchParams] = useSearchParams()
   const fileInputRef = useRef(null)
   const [showAiImport, setShowAiImport] = useState(false)
+  const [showEditProjectModal, setShowEditProjectModal] = useState(false)
 
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < historyLen - 1
@@ -320,6 +322,14 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth, 
       </Tooltip>
 
       <span className="font-semibold text-gray-800 text-lg max-w-40 truncate border-gray-200 px-2">{projectName || '故障树'}</span>
+      <Tooltip title="修改项目详情">
+        <Button
+          type="text"
+          size="small"
+          icon={<EditOutlined />}
+          onClick={() => setShowEditProjectModal(true)}
+        />
+      </Tooltip>
         
         <Tag color="blue" className="text-xs shrink-0">故障树</Tag>
 
@@ -466,6 +476,16 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth, 
       target="faultTree"
       onComplete={handleAiImportComplete}
       onCancel={() => setShowAiImport(false)}
+    />
+
+    <UpdateProjectModal
+      open={showEditProjectModal}
+      project={project || { id: projectId || searchParams.get('id'), name: projectName, type: 'ft' }}
+      onCancel={() => setShowEditProjectModal(false)}
+      onUpdated={(nextProject) => {
+        setShowEditProjectModal(false)
+        onProjectUpdated?.(nextProject)
+      }}
     />
   </>
   )

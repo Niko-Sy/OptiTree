@@ -3,9 +3,11 @@ import { Card, Button, Tag, Popconfirm, Tooltip, Progress } from 'antd'
 import {
   FolderOpenOutlined, DeleteOutlined, ClockCircleOutlined,
   ApartmentOutlined, NodeIndexOutlined, TeamOutlined, HistoryOutlined,
-  ShareAltOutlined, ApiOutlined,
+  ShareAltOutlined, ApiOutlined, EditOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
+import UpdateProjectModal from '../common/UpdateProjectModal'
 
 /** project.type === 'kg' 时渲染知识图谱卡片，否则渲染故障树卡片 */
 const GENERATING_STATUSES = new Set(['pending_generating', 'generating'])
@@ -42,8 +44,14 @@ function toTimeLabel(value) {
   return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-export default function ProjectCard({ cardId, highlighted = false, project, onDelete, taskProgress, taskInfo, onRetry, retryLoading = false }) {
+function isActionElement(target) {
+  if (!target || typeof target.closest !== 'function') return false
+  return Boolean(target.closest('button, a, input, textarea, [role="button"], .ant-btn, .ant-popover, .ant-tooltip, .ant-modal, .ant-modal-wrap, .ant-modal-mask'))
+}
+
+export default function ProjectCard({ cardId, highlighted = false, project, onDelete, taskProgress, taskInfo, onRetry, retryLoading = false, onUpdated }) {
   const navigate = useNavigate()
+  const [showEditModal, setShowEditModal] = useState(false)
   const isKg = project.type === 'kg'
   const generationStatus = project.generation_status || 'completed'
   const displayStatus = resolveDisplayStatus(generationStatus, taskInfo)
@@ -60,6 +68,8 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
   const stageHistory = Array.isArray(taskInfo?.stageHistory) ? taskInfo.stageHistory : []
 
   function handleOpen(e) {
+    if (showEditModal) return
+    if (isActionElement(e?.target)) return
     e?.stopPropagation()
     if (!canOpen) return
     if (isKg) navigate(`/knowledge?id=${project.id}`)
@@ -74,6 +84,13 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
   function handleRetry(e) {
     e.stopPropagation()
     onRetry?.(project)
+  }
+
+  function handleEdit(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    e.nativeEvent?.stopImmediatePropagation?.()
+    setShowEditModal(true)
   }
 
   const date = new Date(project.createdAt).toLocaleDateString('zh-CN', {
@@ -113,6 +130,14 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          <Tooltip title="修改项目详情">
+            <Button
+              type="text"
+              icon={<EditOutlined />}
+              size="small"
+              onClick={handleEdit}
+            />
+          </Tooltip>
           {/* 删除按钮 */}
           <Popconfirm
             title={isKg ? '删除知识图谱' : '删除项目'}
@@ -241,6 +266,16 @@ export default function ProjectCard({ cardId, highlighted = false, project, onDe
           </Button>
         </Tooltip>
       </div>
+
+      <UpdateProjectModal
+        open={showEditModal}
+        project={project}
+        onCancel={() => setShowEditModal(false)}
+        onUpdated={(nextProject) => {
+          setShowEditModal(false)
+          onUpdated?.(nextProject)
+        }}
+      />
     </Card>
   )
 }

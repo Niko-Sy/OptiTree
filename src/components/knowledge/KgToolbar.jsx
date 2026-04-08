@@ -9,7 +9,7 @@ import {
   DownloadOutlined, UploadOutlined, ApartmentOutlined,
   ThunderboltOutlined, SaveOutlined, TeamOutlined,
   RobotOutlined, FileImageOutlined, FileSyncOutlined, DownOutlined,
-  RadarChartOutlined, AppstoreOutlined, ClusterOutlined,
+  RadarChartOutlined, AppstoreOutlined, ClusterOutlined, EditOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useKnowledgeStore, useKnowledgeActions } from '../../store/useKnowledgeStore'
@@ -22,14 +22,16 @@ import {
   assignParallelEdgeOffsets, applyClusteredLayout,
 } from '../../utils/layoutAlgorithm'
 import DocumentUploadModal from '../dashboard/DocumentUploadModal'
+import UpdateProjectModal from '../common/UpdateProjectModal'
 
 // ─── 工具栏主组件 ────────────────────────────────────────────────────
-export default function KgToolbar({ kgName, kgId, rfInstanceRef, aiAssistantRef, fitRef }) {
+export default function KgToolbar({ kgName, kgId, project, onProjectUpdated, rfInstanceRef, aiAssistantRef, fitRef }) {
   const navigate = useNavigate()
   const { rfNodes, rfEdges, historyIndex, history } = useKnowledgeStore()
   const { setGraph, setAiIssues, undo, redo } = useKnowledgeActions()
   const fileInputRef = useRef(null)
   const [showAiImport, setShowAiImport] = useState(false)
+  const [showEditProjectModal, setShowEditProjectModal] = useState(false)
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
 
@@ -169,6 +171,14 @@ export default function KgToolbar({ kgName, kgId, rfInstanceRef, aiAssistantRef,
       <span className="font-semibold text-gray-800 text-lg max-w-40 truncate  border-gray-200 px-2 ">
         {kgName || '知识图谱'} 
       </span>
+      <Tooltip title="修改项目详情">
+        <Button
+          type="text"
+          size="small"
+          icon={<EditOutlined />}
+          onClick={() => setShowEditProjectModal(true)}
+        />
+      </Tooltip>
 
       <Tag color="purple" className="text-xs shrink-0">知识图谱</Tag>
 
@@ -304,6 +314,16 @@ export default function KgToolbar({ kgName, kgId, rfInstanceRef, aiAssistantRef,
       target="knowledge"
       onComplete={handleAiImportComplete}
       onCancel={() => setShowAiImport(false)}
+    />
+
+    <UpdateProjectModal
+      open={showEditProjectModal}
+      project={project || { id: kgId, name: kgName, type: 'kg' }}
+      onCancel={() => setShowEditProjectModal(false)}
+      onUpdated={(nextProject) => {
+        setShowEditProjectModal(false)
+        onProjectUpdated?.(nextProject)
+      }}
     />
     </>
   )

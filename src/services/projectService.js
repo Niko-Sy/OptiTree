@@ -48,6 +48,10 @@ export function getProject(projectId) {
   return get(`/api/v1/projects/${projectId}`).then(normalizeProjectResponse)
 }
 
+export function updateProject(projectId, payload) {
+  return post(`/api/v1/projects/${projectId}/update`, payload).then(normalizeProjectResponse)
+}
+
 export function deleteProject(projectId) {
   return post(`/api/v1/projects/${projectId}/delete`, {})
 }

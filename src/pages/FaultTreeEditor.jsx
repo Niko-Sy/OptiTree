@@ -38,7 +38,7 @@ function hasBlockingTaskMeta(projectId) {
 }
 
 // ─── Inner editor (needs access to store) ────────────────────────
-function EditorInner({ projectId, projectName }) {
+function EditorInner({ projectId, project, onProjectUpdated }) {
   const nodes = _useRawStore(s => s.nodes, shallow)
   const edges = _useRawStore(s => s.edges, shallow)
   const { setGraph } = useEditorActions()
@@ -115,7 +115,10 @@ function EditorInner({ projectId, projectName }) {
   return (
     <div className="h-screen flex flex-col overflow-hidden">
       <Toolbar
-        projectName={projectName}
+        projectName={project?.name}
+        projectId={projectId}
+        project={project}
+        onProjectUpdated={onProjectUpdated}
         canvasWidth={canvasWidthRef.current?.() || 900}
         aiAssistantRef={aiAssistantRef}
         fitRef={fitRef}
@@ -137,7 +140,7 @@ export default function FaultTreeEditor() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const projectId = searchParams.get('id')
-  const [projectName, setProjectName] = useState('未命名项目')
+  const [projectDetail, setProjectDetail] = useState(null)
   const [accessReady, setAccessReady] = useState(false)
 
   useEffect(() => {
@@ -155,7 +158,10 @@ export default function FaultTreeEditor() {
           navigate('/dashboard')
           return
         }
-        setProjectName(project?.name || '未命名项目')
+        setProjectDetail({
+          ...project,
+          type: project?.type || 'ft',
+        })
         setAccessReady(true)
       })
       .catch(() => {
@@ -174,7 +180,13 @@ export default function FaultTreeEditor() {
 
   return (
     <EditorStoreProvider>
-      <EditorInner projectId={projectId} projectName={projectName} />
+      <EditorInner
+        projectId={projectId}
+        project={projectDetail || { id: projectId, type: 'ft', name: '未命名项目' }}
+        onProjectUpdated={(nextProject) => {
+          setProjectDetail(prev => ({ ...(prev || {}), ...(nextProject || {}) }))
+        }}
+      />
     </EditorStoreProvider>
   )
 }

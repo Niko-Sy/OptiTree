@@ -14,7 +14,7 @@ import {
   ArrowLeftOutlined, HistoryOutlined, TeamOutlined,
   UserAddOutlined, DownloadOutlined, RollbackOutlined,
   EyeOutlined, DeleteOutlined, ApartmentOutlined, ApiOutlined,
-  ClockCircleOutlined,
+  ClockCircleOutlined, EditOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../store/useAuthStore'
 import UserAvatar from '../components/common/UserAvatar'
@@ -26,6 +26,7 @@ import { getProject } from '../services/projectService'
 import { exportFaultTree } from '../services/faultTreeService'
 import { exportKnowledgeGraph } from '../services/knowledgeGraphService'
 import { buildFaultTreeSVG, buildKgSVG, downloadSvg, downloadSvgAsPng } from '../utils/exportUtils'
+import UpdateProjectModal from '../components/common/UpdateProjectModal'
 
 const { Text } = Typography
 
@@ -59,11 +60,16 @@ export default function Collaboration() {
 
   // ── 项目基本信息 ────────────────────────────────────────────
   const [projectName, setProjectName] = useState('未命名')
+  const [projectDetail, setProjectDetail] = useState(null)
+  const [showEditProjectModal, setShowEditProjectModal] = useState(false)
 
   useEffect(() => {
     if (!projectId) return
     getProject(projectId)
-      .then(({ project }) => setProjectName(project?.name ?? '未命名'))
+      .then(({ project }) => {
+        setProjectName(project?.name ?? '未命名')
+        setProjectDetail(project || null)
+      })
       .catch(() => {})
   }, [projectId])
 
@@ -252,6 +258,14 @@ export default function Collaboration() {
             </div>
             <div>
               <span className="font-semibold text-gray-900">{projectName}</span>
+              <Tooltip title="修改项目详情">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => setShowEditProjectModal(true)}
+                />
+              </Tooltip>
               <Tag color={isKg ? 'purple' : 'blue'} className="ml-2 text-xs">
                 {isKg ? '知识图谱' : '故障树'}
               </Tag>
@@ -460,6 +474,17 @@ export default function Collaboration() {
           </div>
         </div>
       </main>
+
+      <UpdateProjectModal
+        open={showEditProjectModal}
+        project={projectDetail || { id: projectId, type: isKg ? 'kg' : 'ft', name: projectName }}
+        onCancel={() => setShowEditProjectModal(false)}
+        onUpdated={(nextProject) => {
+          setShowEditProjectModal(false)
+          setProjectDetail(prev => ({ ...(prev || {}), ...(nextProject || {}) }))
+          setProjectName(nextProject?.name || projectName || '未命名')
+        }}
+      />
 
       {/* 邀请成员弹窗 */}
       <Modal

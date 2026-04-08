@@ -41,7 +41,7 @@ function hasBlockingTaskMeta(projectId) {
 }
 
 // ─── 内层组件（含 Store 访问）─────────────────────────────────────
-function KnowledgeEditorInner({ kgId, kgName }) {
+function KnowledgeEditorInner({ kgId, project, onProjectUpdated }) {
   const { rfNodes, rfEdges } = useKnowledgeStore()
   const { setGraph } = useKnowledgeActions()
 
@@ -110,7 +110,15 @@ function KnowledgeEditorInner({ kgId, kgName }) {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
-      <KgToolbar kgName={kgName} kgId={kgId} rfInstanceRef={rfInstanceRef} aiAssistantRef={aiAssistantRef} fitRef={fitRef} />
+      <KgToolbar
+        kgName={project?.name}
+        kgId={kgId}
+        project={project}
+        onProjectUpdated={onProjectUpdated}
+        rfInstanceRef={rfInstanceRef}
+        aiAssistantRef={aiAssistantRef}
+        fitRef={fitRef}
+      />
       <div className="flex-1 relative overflow-hidden kg-canvas-wrapper">
         <KgCanvas leftOffset={leftOffset} rightOffset={rightOffset} onRfInit={(inst) => { rfInstanceRef.current = inst }} fitRef={fitRef} />
         {/* 左右偏移量仅传入用于 Controls/MiniMap 的内部定位 */}
@@ -128,7 +136,7 @@ export default function KnowledgeGraphEditor() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const kgId = searchParams.get('id')
-  const [kgName, setKgName] = useState('未命名知识图谱')
+  const [projectDetail, setProjectDetail] = useState(null)
   const [accessReady, setAccessReady] = useState(false)
 
   useEffect(() => {
@@ -146,7 +154,10 @@ export default function KnowledgeGraphEditor() {
           navigate('/dashboard')
           return
         }
-        setKgName(project?.name || '未命名知识图谱')
+        setProjectDetail({
+          ...project,
+          type: project?.type || 'kg',
+        })
         setAccessReady(true)
       })
       .catch(() => {
@@ -165,7 +176,13 @@ export default function KnowledgeGraphEditor() {
 
   return (
     <KnowledgeStoreProvider>
-      <KnowledgeEditorInner kgId={kgId} kgName={kgName} />
+      <KnowledgeEditorInner
+        kgId={kgId}
+        project={projectDetail || { id: kgId, type: 'kg', name: '未命名知识图谱' }}
+        onProjectUpdated={(nextProject) => {
+          setProjectDetail(prev => ({ ...(prev || {}), ...(nextProject || {}) }))
+        }}
+      />
     </KnowledgeStoreProvider>
   )
 }

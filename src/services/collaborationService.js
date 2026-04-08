@@ -71,7 +71,7 @@ export function inviteMember(projectId, payload) {
 }
 
 export function updateMemberRole(projectId, memberId, payload) {
-  return post(`/api/v1/projects/${projectId}/members/${memberId}/update-role`, payload)
+  return post(`/api/v1/projects/${projectId}/members/${memberId}/update`, payload)
 }
 
 export function removeMember(projectId, memberId) {

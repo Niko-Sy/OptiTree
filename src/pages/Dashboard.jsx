@@ -582,6 +582,12 @@ export default function Dashboard() {
     }
   }
 
+  function handleUpdateProject(nextProject) {
+    if (!nextProject?.id) return
+    setProjects(prev => prev.map(item => (item.id === nextProject.id ? { ...item, ...nextProject } : item)))
+    setKgList(prev => prev.map(item => (item.id === nextProject.id ? { ...item, ...nextProject } : item)))
+  }
+
   // ─── Dropdown 菜单项 ──────────────────────────────────────────
   const newMenuItems = [
     {
@@ -835,6 +841,7 @@ export default function Dashboard() {
                   search={search}
                   onDelete={handleDeleteProject}
                   onRetry={handleRetryGenerate}
+                  onUpdate={handleUpdateProject}
                   onNew={() => setShowModal(true)}
                   emptyText="还没有故障树项目"
                   newLabel="新建故障树"
@@ -854,6 +861,7 @@ export default function Dashboard() {
                   search={search}
                   onDelete={handleDeleteKg}
                   onRetry={handleRetryGenerate}
+                  onUpdate={handleUpdateProject}
                   onNew={() => setShowKgModal(true)}
                   emptyText="还没有知识图谱"
                   newLabel="新建知识图谱"
@@ -900,6 +908,7 @@ function ProjectGrid({
   search,
   onDelete,
   onRetry,
+  onUpdate,
   onNew,
   emptyText,
   newLabel,
@@ -935,6 +944,7 @@ function ProjectGrid({
             taskInfo={taskRuntimeByProject?.[p.id]}
             onRetry={onRetry}
             retryLoading={retryingProjectId === p.id}
+            onUpdated={onUpdate}
           />
         ))}
         <div
