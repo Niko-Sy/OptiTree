@@ -8,27 +8,17 @@
  */
 import { useState, useRef, useEffect } from 'react'
 import {
-  Modal, Upload, Form, Input, Select, Slider, Steps,
+  Modal, Upload, Form, Input, Steps,
   Button, Alert, Progress, Typography, Space, message,
 } from 'antd'
 import {
   InboxOutlined, FileTextOutlined, ThunderboltOutlined,
   CheckCircleOutlined, LoadingOutlined,
 } from '@ant-design/icons'
-import { uploadDocuments, generateFaultTree, generateKnowledgeGraph, getAiModels } from '../../services/aiService'
+import { uploadDocuments, generateFaultTree, generateKnowledgeGraph } from '../../services/aiService'
 
 const { Dragger } = Upload
 const { Text } = Typography
-
-const QUALITY_MARKS = { 1: '快速', 2: '平衡', 3: '精细' }
-const QUALITY_MAP = { 1: 'fast', 2: 'balanced', 3: 'precise' }
-
-const DEFAULT_MODEL_OPTIONS = [
-  { value: 'qwen-plus', label: '通义千问-Plus（推荐）' },
-  { value: 'qwen-turbo', label: '通义千问-Turbo（快速）' },
-  { value: 'deepseek-v3', label: 'DeepSeek-V3' },
-  { value: 'custom', label: '自定义模型（TODO）' },
-]
 
 const STEP_CONFIG = {
   faultTree: [
@@ -51,7 +41,6 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
-  const [modelOptions, setModelOptions] = useState(DEFAULT_MODEL_OPTIONS)
   const progressTimer = useRef(null)
 
   // 组件卸载时清除可能仍在运行的进度模拟定时器
@@ -60,18 +49,6 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
   const isFaultTree = target === 'faultTree'
   const title = isFaultTree ? '📤 文档 → 故障树（AI 生成）' : '🗺️ 文档 → 知识图谱（AI 生成）'
   const steps = STEP_CONFIG[target]
-
-  useEffect(() => {
-    if (!open) return
-    getAiModels()
-      .then((list) => {
-        if (!Array.isArray(list) || list.length === 0) return
-        setModelOptions(list)
-      })
-      .catch(() => {
-        setModelOptions(DEFAULT_MODEL_OPTIONS)
-      })
-  }, [open])
 
   function resetState() {
     setStep(-1)
@@ -112,8 +89,6 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
       }
 
       setErrorMsg('')
-      const quality = QUALITY_MAP[values.quality ?? 2]
-      const model = values.model ?? 'qwen-plus'
 
       // ── Step 0: 文档上传/解析 ──────────────────────────────
       setStep(0)
@@ -121,7 +96,7 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
       simulateProgress(0, 35, 500, null)
 
       const files = fileList.map(f => f.originFileObj ?? f)
-      const { docIds } = await uploadDocuments(files, { quality, model })
+      const { docIds } = await uploadDocuments(files)
       if (!Array.isArray(docIds) || docIds.length === 0) {
         throw new Error('文档上传成功但未返回可用文档 ID，请稍后重试')
       }
@@ -134,11 +109,11 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
       let genResult
       let retryPayload
       if (isFaultTree) {
-        retryPayload = { docIds, topEvent: values.topEvent, config: { quality, model }, type: 'ft' }
-        genResult = await generateFaultTree(docIds, values.topEvent, { quality, model })
+        retryPayload = { docIds, topEvent: values.topEvent, type: 'ft' }
+        genResult = await generateFaultTree(docIds, values.topEvent)
       } else {
-        retryPayload = { docIds, config: { quality, model }, type: 'kg' }
-        genResult = await generateKnowledgeGraph(docIds, { quality, model })
+        retryPayload = { docIds, type: 'kg' }
+        genResult = await generateKnowledgeGraph(docIds)
       }
 
       simulateProgress(70, 100, 300, null)
@@ -205,25 +180,17 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
           {isFaultTree && (
             <Form.Item
               name="topEvent"
-              label="顶事件（故障现象）"
-              rules={[{ required: true, message: '请输入顶事件描述' }]}
+              label="项目名称"
+              rules={[{ required: true, message: '请输入项目名称' }]}
             >
               <Input
                 prefix={<FileTextOutlined className="text-gray-400" />}
-                placeholder="例：液压系统压力不足"
+                placeholder="例：锅炉房故障树项目"
                 maxLength={60}
                 showCount
               />
             </Form.Item>
           )}
-
-          <Form.Item name="quality" label="生成质量" initialValue={2}>
-            <Slider min={1} max={3} step={1} marks={QUALITY_MARKS} className="mx-2" />
-          </Form.Item>
-
-          <Form.Item name="model" label="AI 模型" initialValue="qwen-plus">
-            <Select options={modelOptions} />
-          </Form.Item>
 
           <div className="flex justify-end gap-2 mt-2">
             <Button onClick={handleClose}>取消</Button>

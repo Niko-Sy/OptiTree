@@ -1,5 +1,5 @@
 // 故障树编辑器页面，包含画布、工具栏、属性面板等组件，并处理项目数据的加载和保存
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { message, Spin } from 'antd'
 import { EditorStoreProvider, useEditorActions } from '../store/useEditorStore'
@@ -42,12 +42,6 @@ function EditorInner({ projectId, projectName }) {
   const nodes = _useRawStore(s => s.nodes, shallow)
   const edges = _useRawStore(s => s.edges, shallow)
   const { setGraph } = useEditorActions()
-
-  // 为 AI 助手提供当前图数据上下文
-  const getContext = useCallback(() => ({
-    nodes,
-    edges,
-  }), [nodes, edges])
 
   const canvasWidthRef = useRef(null)
   // AI 助手引用：由工具栏按钮触发弹出
@@ -133,7 +127,7 @@ function EditorInner({ projectId, projectName }) {
         <PropertiesPanel collapsed={propsPanelCollapsed} onCollapsedChange={setPropsPanelCollapsed} />
       </div>
       <StatusBar />
-      <AIAssistant ref={aiAssistantRef} contextType="faultTree" getContext={getContext} />
+      <AIAssistant ref={aiAssistantRef} contextType="faultTree" projectId={projectId} />
     </div>
   )
 }

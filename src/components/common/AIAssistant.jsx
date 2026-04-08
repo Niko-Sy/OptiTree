@@ -1,9 +1,9 @@
 ﻿/**
- * AIAssistant — 悬浮 AI 问答助手
+ * AIAssistant — 悬浮 AI 问答助手（会话化版本）
  *
  * Props:
  *   contextType  'faultTree' | 'knowledgeGraph'
- *   getContext   () => { nodes, edges }  返回当前图数据
+ *   projectId    string  当前项目 ID（会话绑定）
  *
  * 特性：
  *   - position:fixed 浮动圆形按钮，带脉冲波纹
@@ -11,29 +11,38 @@
  *   - 不遮挡顶部导航栏（56px）
  *   - 点击展开/关闭可拖拽缩放的对话面板
  *   - 10s 无操作显示方向自适应气泡提示
- *   - 调用 aiService.chatWithAI 获取 AI 回复
+ *   - 基于后端会话化 API：消息持久化 + 历史游标加载
+ *   - 懒创建会话（首条消息时），会话 ID 持久化到 localStorage
+ *   - 模型选择器，新建对话按钮
  */
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
-import { Input, Spin, Tag, Tooltip } from 'antd'
+import { Input, Spin, Tag, Tooltip, Select } from 'antd'
 import {
   RobotOutlined,
   CloseOutlined,
   SendOutlined,
   ClearOutlined,
   BorderOutlined,
+  PlusOutlined,
 } from '@ant-design/icons'
-import { chatWithAI, getQuickQuestions } from '../../services/aiService'
+import { getQuickQuestions } from '../../services/aiService'
+import {
+  getAssistantModels,
+  createConversation,
+  getConversationMessages,
+  sendMessageStream,
+} from '../../services/assistantService'
 
 // ─── 布局常量 ────────────────────────────────────────────────────────
-const TOP_NAV_H      = 56    // h-14 顶部导航栏高度（px）
+const TOP_NAV_H      = 56
 const BTN_SIZE       = 48
-const EDGE_PAD       = 8     // 距屏幕边缘最小间距
-const SNAP_MS        = 580   // 吸附弹性动画时长
-const IDLE_MS        = 5000 // 无操作提示气泡触发时间
-const BUBBLE_W       = 186   // 气泡估算总宽（文字 + 内边距 + 箭头）
+const EDGE_PAD       = 8
+const SNAP_MS        = 580
+const IDLE_MS        = 5000
+const BUBBLE_W       = 186
 const DRAG_THRESHOLD = 5
-const PANEL_MIN_W    = 280   // 面板最小宽度
-const PANEL_MIN_H    = 400   // 面板最小高度
+const PANEL_MIN_W    = 320
+const PANEL_MIN_H    = 450
 
 const CONTEXT_LABELS = {
   faultTree:      '故障树助手',
@@ -66,27 +75,45 @@ function getSavedPosition() {
       return clampBtnPos(x, y)
     }
   } catch {}
-  // return clampBtnPos(window.innerWidth - 96, window.innerHeight - 96)
   return clampBtnPos(0, window.innerHeight - 96)
 }
 
-// 计算对话面板位置（不盖导航栏）
 function calcPanelPos(btnX, btnY, panelW, panelH) {
   let left = btnX - panelW - EDGE_PAD
   let top  = btnY - panelH + BTN_SIZE
-
   if (left < EDGE_PAD) left = btnX + BTN_SIZE + EDGE_PAD
   if (top  < TOP_NAV_H + EDGE_PAD) top = TOP_NAV_H + EDGE_PAD
   if (left + panelW > window.innerWidth  - EDGE_PAD) left = window.innerWidth  - panelW - EDGE_PAD
   if (top  + panelH > window.innerHeight - EDGE_PAD) top  = window.innerHeight - panelH - EDGE_PAD
-
   return { left, top }
+}
+
+// ─── 会话 ID 持久化工具 ──────────────────────────────────────────────
+function getConvStorageKey(projectId, contextType) {
+  return `ai_conv_${projectId}_${contextType}`
+}
+function getSavedConversationId(projectId, contextType) {
+  try { return localStorage.getItem(getConvStorageKey(projectId, contextType)) || null } catch { return null }
+}
+function saveConversationId(projectId, contextType, id) {
+  try { localStorage.setItem(getConvStorageKey(projectId, contextType), id) } catch {}
+}
+function clearConversationId(projectId, contextType) {
+  try { localStorage.removeItem(getConvStorageKey(projectId, contextType)) } catch {}
+}
+
+// ─── 消息规范化（API 新→旧 → 展示旧→新，role 映射） ──────────────────
+function normalizeApiMessages(apiMessages) {
+  return [...apiMessages].reverse().map(m => ({
+    id:      m.id,
+    role:    m.role === 'assistant' ? 'ai' : m.role,
+    content: m.content || '',
+  }))
 }
 
 // ─── Markdown 行内元素渲染 ──────────────────────────────────────────
 function renderInline(text) {
   if (!text) return null
-  // 按优先级分割：粗斜体 > 粗体 > 行内代码 > 斜体
   const parts = text.split(/(\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|`[^`]+`|\*[^\s*][^\n*]*\*)/g)
   return parts.map((seg, i) => {
     if (seg.startsWith('***') && seg.endsWith('***'))
@@ -117,7 +144,6 @@ function MarkdownContent({ content }) {
   let i = 0
   while (i < lines.length) {
     const line = lines[i]
-    // 代码块
     if (line.startsWith('```')) {
       const codeLines = []
       i++
@@ -136,33 +162,28 @@ function MarkdownContent({ content }) {
           <code>{codeLines.join('\n')}</code>
         </pre>
       )
-    }
-    // 标题
-    else if (/^#{1,3} /.test(line)) {
+    } else if (/^#{1,3} /.test(line)) {
       const level = line.match(/^(#+) /)[1].length
-      const txt = line.replace(/^#+ /, '')
+      const txt   = line.replace(/^#+ /, '')
       const sizes = { 1: 16, 2: 15, 3: 14 }
       elements.push(
         <div key={`h${i}`} style={{
           fontWeight: 700, fontSize: sizes[level] || 14,
           marginTop: level === 1 ? 12 : 8, marginBottom: 3, color: '#111',
-          borderBottom: level <= 2 ? '1px solid #e8e8e8' : 'none', paddingBottom: level <= 2 ? 4 : 0,
+          borderBottom: level <= 2 ? '1px solid #e8e8e8' : 'none',
+          paddingBottom: level <= 2 ? 4 : 0,
         }}>
           {renderInline(txt)}
         </div>
       )
-    }
-    // 无序列表
-    else if (/^[-*+] /.test(line)) {
+    } else if (/^[-*+] /.test(line)) {
       elements.push(
         <div key={`li${i}`} style={{ display: 'flex', gap: 7, paddingLeft: 3, marginBottom: 2 }}>
           <span style={{ color: '#1677ff', flexShrink: 0, lineHeight: '1.7' }}>•</span>
           <span style={{ flex: 1 }}>{renderInline(line.replace(/^[-*+] /, ''))}</span>
         </div>
       )
-    }
-    // 有序列表
-    else if (/^\d+[.)\s]/.test(line)) {
+    } else if (/^\d+[.)\s]/.test(line)) {
       const m = line.match(/^(\d+)[.)\s]\s*(.*)$/)
       if (m) elements.push(
         <div key={`ol${i}`} style={{ display: 'flex', gap: 5, paddingLeft: 3, marginBottom: 2 }}>
@@ -170,9 +191,7 @@ function MarkdownContent({ content }) {
           <span style={{ flex: 1 }}>{renderInline(m[2])}</span>
         </div>
       )
-    }
-    // 引用块
-    else if (/^> /.test(line)) {
+    } else if (/^> /.test(line)) {
       elements.push(
         <div key={`bq${i}`} style={{
           borderLeft: '3px solid #1677ff', paddingLeft: 10,
@@ -181,17 +200,11 @@ function MarkdownContent({ content }) {
           {renderInline(line.slice(2))}
         </div>
       )
-    }
-    // 分割线
-    else if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+    } else if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
       elements.push(<hr key={`hr${i}`} style={{ border: 'none', borderTop: '1px solid #e0e0e0', margin: '8px 0' }} />)
-    }
-    // 空行
-    else if (line.trim() === '') {
+    } else if (line.trim() === '') {
       if (elements.length > 0) elements.push(<div key={`br${i}`} style={{ height: 4 }} />)
-    }
-    // 普通段落
-    else {
+    } else {
       elements.push(
         <div key={`p${i}`} style={{ lineHeight: 1.7 }}>{renderInline(line)}</div>
       )
@@ -231,44 +244,86 @@ function MessageBubble({ role, content }) {
 }
 
 // ─── 主组件 ──────────────────────────────────────────────────────────
-const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree', getContext }, ref) {
-  const [pos,        setPos]        = useState(() => getSavedPosition())
-  const [isSnapping, setIsSnapping] = useState(false)
-  const [isOpen,     setIsOpen]     = useState(false)
-  const [messages,   setMessages]   = useState([])
-  const [inputVal,   setInputVal]   = useState('')
-  const [loading,    setLoading]    = useState(false)
-  const [isTyping,   setIsTyping]   = useState(false)
-  const [showBubble, setShowBubble] = useState(false)
-  const [panelSize,  setPanelSize]  = useState(getInitialPanelSize)
+const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree', projectId }, ref) {
+  const [pos,             setPos]             = useState(() => getSavedPosition())
+  const [isSnapping,      setIsSnapping]      = useState(false)
+  const [isOpen,          setIsOpen]          = useState(false)
+  const [messages,        setMessages]        = useState([])
+  const [inputVal,        setInputVal]        = useState('')
+  const [loading,         setLoading]         = useState(false)
+  const [isTyping,        setIsTyping]        = useState(false)
+  const [showBubble,      setShowBubble]      = useState(false)
+  const [panelSize,       setPanelSize]       = useState(getInitialPanelSize)
+  // 会话相关
+  const [conversationId,    setConversationId]    = useState(null)
+  const [conversationTitle, setConversationTitle] = useState(null)
+  const [models,            setModels]            = useState([])
+  const [selectedModel,     setSelectedModel]     = useState(null)
+  const [historyLoading,    setHistoryLoading]    = useState(false)
+  const [nextCursor,        setNextCursor]        = useState(null)
+  const [hasMoreHistory,    setHasMoreHistory]    = useState(false)
 
   const quickQuestions = getQuickQuestions(contextType)
   const messagesEndRef = useRef(null)
   const inputRef       = useRef(null)
   const abortCtrlRef   = useRef(null)
+  const skipScrollRef  = useRef(false)
 
-  // 按钮拖拽状态（ref 保持引用稳定）
-  const btnDrag = useRef({ active: false, startMX: 0, startMY: 0, startBX: 0, startBY: 0, moved: false })
-
-  // 暴露 open() 方法给外部调用
-  useImperativeHandle(ref, () => ({
-    open: () => setIsOpen(true),
-  }))
-
-  // 面板缩放状态
+  const btnDrag   = useRef({ active: false, startMX: 0, startMY: 0, startBX: 0, startBY: 0, moved: false })
   const resizeRef = useRef({ active: false, edge: null, startMX: 0, startMY: 0, startW: 0, startH: 0 })
 
-  // ── 自动滚动到底部 ─────────────────────────────────────────────
+  useImperativeHandle(ref, () => ({ open: () => setIsOpen(true) }))
+
+  // ── 挂载时加载模型列表 ────────────────────────────────────────
   useEffect(() => {
+    getAssistantModels().then(list => {
+      if (!Array.isArray(list) || list.length === 0) return
+      setModels(list)
+      const rec = list.find(m => m.recommended)
+      setSelectedModel(rec?.value ?? list[0]?.value ?? null)
+    }).catch(() => {})
+  }, [])
+
+  // ── 面板打开时加载历史消息 ────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen || !projectId) return
+    const storedId = getSavedConversationId(projectId, contextType)
+    if (!storedId) return
+
+    setHistoryLoading(true)
+    getConversationMessages(storedId, { limit: 30 })
+      .then(({ conversation, messages: apiMsgs, nextCursor: cursor, hasMore }) => {
+        setConversationId(storedId)
+        setConversationTitle(conversation?.title || null)
+        setMessages(normalizeApiMessages(apiMsgs))
+        setNextCursor(cursor || null)
+        setHasMoreHistory(!!hasMore)
+      })
+      .catch(err => {
+        if (err?.status === 404) {
+          // 会话已在后端删除，清除 stale ID，重置为空会话
+          clearConversationId(projectId, contextType)
+          setConversationId(null)
+          setConversationTitle(null)
+          setMessages([])
+          setNextCursor(null)
+          setHasMoreHistory(false)
+        }
+      })
+      .finally(() => setHistoryLoading(false))
+  }, [isOpen, projectId, contextType])
+
+  // ── 自动滚动到底部（加载历史时跳过）────────────────────────
+  useEffect(() => {
+    if (skipScrollRef.current) { skipScrollRef.current = false; return }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  // ── 窗口缩放时重新定位（吸附到最近侧边）+ 约束面板尺寸 ────
+  // ── 窗口缩放时重新定位 + 约束面板尺寸 ──────────────────────
   useEffect(() => {
     const onResize = () => {
       setPos(prev => {
         const raw = clampBtnPos(prev.x, prev.y)
-        // 保持吸附方向：按钮中心在左半屏吸附左侧，否则吸附右侧
         const snapToX = raw.x + BTN_SIZE / 2 < window.innerWidth / 2
           ? EDGE_PAD
           : window.innerWidth - BTN_SIZE - EDGE_PAD
@@ -307,7 +362,116 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     }
   }, [isOpen])
 
-  // ── 按钮拖拽：mousemove ──────────────────────────────────────
+  // ── 新建对话 ────────────────────────────────────────────────
+  const handleNewConversation = useCallback(() => {
+    abortCtrlRef.current?.abort()
+    setLoading(false)
+    setIsTyping(false)
+    if (projectId) clearConversationId(projectId, contextType)
+    setConversationId(null)
+    setConversationTitle(null)
+    setMessages([])
+    setNextCursor(null)
+    setHasMoreHistory(false)
+    setInputVal('')
+  }, [projectId, contextType])
+
+  // ── 加载更多历史 ─────────────────────────────────────────────
+  const handleLoadMore = useCallback(async () => {
+    if (!conversationId || !nextCursor || historyLoading) return
+    setHistoryLoading(true)
+    try {
+      const { messages: apiMsgs, nextCursor: cursor, hasMore } = await getConversationMessages(
+        conversationId, { before: nextCursor, limit: 30 }
+      )
+      const older = normalizeApiMessages(apiMsgs)
+      skipScrollRef.current = true
+      setMessages(prev => [...older, ...prev])
+      setNextCursor(cursor || null)
+      setHasMoreHistory(!!hasMore)
+    } catch {
+      // silent
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [conversationId, nextCursor, historyLoading])
+
+  // ── 中断回答 ────────────────────────────────────────────────
+  const handleStop = useCallback(() => {
+    abortCtrlRef.current?.abort()
+  }, [])
+
+  // ── 发送消息 ────────────────────────────────────────────────
+  const handleSend = useCallback(async (text) => {
+    const msg = (text ?? inputVal).trim()
+    if (!msg || loading || !projectId) return
+
+    const userMsgId = Date.now()
+    const aiMsgId   = userMsgId + 1
+    setInputVal('')
+    setMessages(prev => [...prev, { id: userMsgId, role: 'user', content: msg }])
+
+    const controller = new AbortController()
+    abortCtrlRef.current = controller
+    setLoading(true)
+    setIsTyping(true)
+    let aiMsgAdded = false
+
+    try {
+      // Step 1: 确保会话存在（懒创建）
+      let convId = conversationId
+      if (!convId) {
+        const conv = await createConversation(projectId, contextType)
+        convId = conv?.id
+        if (!convId) throw new Error('创建对话失败，请重试')
+        saveConversationId(projectId, contextType, convId)
+        setConversationId(convId)
+        setConversationTitle(conv?.title || null)
+      }
+
+      // Step 2: 流式发送消息
+      await sendMessageStream(convId, msg, selectedModel, {
+        signal: controller.signal,
+        onChunk: (chunk) => {
+          if (!chunk) return
+          setIsTyping(false)
+          if (!aiMsgAdded) {
+            aiMsgAdded = true
+            setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: chunk }])
+          } else {
+            setMessages(prev => prev.map(item =>
+              item.id === aiMsgId ? { ...item, content: item.content + chunk } : item
+            ))
+          }
+        },
+        onDone: (meta) => {
+          // 若会话标题刚刚由后端生成（首消息后），更新展示
+          if (meta?.conversationId && !conversationTitle) {
+            setConversationTitle(msg.slice(0, 30))
+          }
+        },
+      })
+    } catch (err) {
+      const isAborted = err?.name === 'AbortError' || controller.signal.aborted
+      if (isAborted) {
+        if (!aiMsgAdded)
+          setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '（已停止生成）' }])
+      } else {
+        if (!aiMsgAdded)
+          setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '抱歉，AI 助手暂时无法响应，请稍后重试。' }])
+      }
+    } finally {
+      abortCtrlRef.current = null
+      setLoading(false)
+      setIsTyping(false)
+    }
+  }, [inputVal, loading, projectId, contextType, conversationId, selectedModel, conversationTitle])
+
+  const handleClear = useCallback(() => {
+    handleNewConversation()
+  }, [handleNewConversation])
+
+  // ── 按钮拖拽 ─────────────────────────────────────────────────
   const onBtnMouseMove = useCallback((e) => {
     const d = btnDrag.current
     if (!d.active) return
@@ -318,7 +482,6 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     setPos(clampBtnPos(d.startBX + dx, d.startBY + dy))
   }, [])
 
-  // ── 按钮拖拽：mouseup → 吸附到左/右侧 ──────────────────────
   const onBtnMouseUp = useCallback((e) => {
     const d = btnDrag.current
     if (!d.active) return
@@ -326,17 +489,14 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     document.removeEventListener('mousemove', onBtnMouseMove)
     document.removeEventListener('mouseup',   onBtnMouseUp)
     if (!d.moved) return
-
     const raw = clampBtnPos(
       d.startBX + (e.clientX - d.startMX),
       d.startBY + (e.clientY - d.startMY),
     )
-    // 按钮中心在左半屏则吸附左侧，否则吸附右侧
     const snapToX = raw.x + BTN_SIZE / 2 < window.innerWidth / 2
       ? EDGE_PAD
       : window.innerWidth - BTN_SIZE - EDGE_PAD
     const snapped = { x: snapToX, y: raw.y }
-
     setIsSnapping(true)
     setPos(snapped)
     try { localStorage.setItem('ai_assistant_position', JSON.stringify(snapped)) } catch {}
@@ -363,7 +523,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     setIsOpen(v => !v)
   }, [])
 
-  // ── 面板边缘缩放 ────────────────────────────────────────────
+  // ── 面板边缘缩放 ─────────────────────────────────────────────
   const onResizeMouseMove = useCallback((e) => {
     const r = resizeRef.current
     if (!r.active) return
@@ -401,67 +561,8 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     document.addEventListener('mouseup',   onResizeMouseUp)
   }, [panelSize, onResizeMouseMove, onResizeMouseUp])
 
-  // ── 中断回答 ────────────────────────────────────────────────
-  const handleStop = useCallback(() => {
-    abortCtrlRef.current?.abort()
-  }, [])
-
-  // ── 发送消息 ────────────────────────────────────────────────
-  const handleSend = useCallback(async (text) => {
-    const msg = (text ?? inputVal).trim()
-    if (!msg || loading) return
-    const userMsgId = Date.now()
-    const aiMsgId   = userMsgId + 1
-    setInputVal('')
-    setMessages(prev => [
-      ...prev,
-      { id: userMsgId, role: 'user', content: msg },
-    ])
-    const controller = new AbortController()
-    abortCtrlRef.current = controller
-    setLoading(true)
-    setIsTyping(true)
-    let aiMsgAdded = false
-    try {
-      const ctx = getContext?.() ?? {}
-      await chatWithAI(ctx, contextType, msg, {
-        signal: controller.signal,
-        onChunk: (chunk) => {
-          if (!chunk) return
-          setIsTyping(false)
-          if (!aiMsgAdded) {
-            aiMsgAdded = true
-            setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: chunk }])
-          } else {
-            setMessages(prev => prev.map(item =>
-              item.id === aiMsgId ? { ...item, content: item.content + chunk } : item
-            ))
-          }
-        },
-      })
-    } catch (err) {
-      const isAborted = err?.name === 'AbortError' || controller.signal.aborted
-      if (isAborted) {
-        if (!aiMsgAdded) {
-          setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '（已停止生成）' }])
-        }
-      } else {
-        if (!aiMsgAdded) {
-          setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '抱歉，AI 助手暂时无法响应，请稍后重试。' }])
-        }
-      }
-    } finally {
-      abortCtrlRef.current = null
-      setLoading(false)
-      setIsTyping(false)
-    }
-  }, [inputVal, loading, getContext, contextType])
-
-  const handleClear = useCallback(() => { setMessages([]); setInputVal('') }, [])
-
-  // ── 派生值 ──────────────────────────────────────────────────
+  // ── 派生值 ───────────────────────────────────────────────────
   const panelPos    = calcPanelPos(pos.x, pos.y, panelSize.width, panelSize.height)
-  // 气泡方向：按钮左侧空间不足时向右弹出
   const bubbleRight = pos.x < BUBBLE_W + EDGE_PAD * 2
   const bubbleTop   = pos.y + BTN_SIZE / 2 - 19
 
@@ -500,15 +601,23 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
             }}>
               <RobotOutlined style={{ color: '#fff', fontSize: 16 }} />
             </div>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: '#fff', fontWeight: 600, fontSize: 13, lineHeight: 1.3 }}>
                 {CONTEXT_LABELS[contextType] ?? 'AI 助手'}
               </div>
-              <div style={{ color: 'rgba(255,255,255,0.72)', fontSize: 10 }}>
-                基于当前图结构智能解答
+              <div style={{
+                color: 'rgba(255,255,255,0.72)', fontSize: 10,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {conversationTitle || '基于当前图结构智能解答'}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+              <Tooltip title="新建对话">
+                <button onClick={handleNewConversation} style={TOOL_BTN}>
+                  <PlusOutlined style={{ fontSize: 13 }} />
+                </button>
+              </Tooltip>
               <Tooltip title="清空对话">
                 <button onClick={handleClear} style={TOOL_BTN}>
                   <ClearOutlined style={{ fontSize: 13 }} />
@@ -519,6 +628,28 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               </button>
             </div>
           </div>
+
+          {/* 模型选择行 */}
+          {models.length > 0 && (
+            <div style={{
+              padding: '6px 12px 5px',
+              borderBottom: '1px solid #f0f0f0',
+              flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: '#fafafa',
+            }}>
+              <span style={{ fontSize: 10, color: '#8c8c8c', flexShrink: 0 }}>模型</span>
+              <Select
+                size="small"
+                value={selectedModel}
+                onChange={setSelectedModel}
+                options={models}
+                disabled={loading}
+                style={{ flex: 1, fontSize: 11 }}
+                popupMatchSelectWidth={false}
+              />
+            </div>
+          )}
 
           {/* 快捷提问区 */}
           <div style={{ padding: '8px 12px 5px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 }}>
@@ -545,7 +676,33 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
 
           {/* 消息区 */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column' }}>
-            {messages.length === 0 && !loading && (
+            {/* 加载更多历史 */}
+            {hasMoreHistory && (
+              <div style={{ textAlign: 'center', padding: '4px 0 8px', flexShrink: 0 }}>
+                <button
+                  onClick={handleLoadMore}
+                  disabled={historyLoading}
+                  style={{
+                    border: '1px solid #d0e4ff', background: '#f0f7ff',
+                    color: '#1677ff', borderRadius: 20, padding: '3px 16px',
+                    fontSize: 11, cursor: historyLoading ? 'not-allowed' : 'pointer',
+                    opacity: historyLoading ? 0.6 : 1,
+                  }}
+                >
+                  {historyLoading ? '加载中...' : '加载更多'}
+                </button>
+              </div>
+            )}
+
+            {/* 历史加载中（空消息列表） */}
+            {historyLoading && messages.length === 0 && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
+                <Spin size="small" />
+              </div>
+            )}
+
+            {/* 空状态 */}
+            {messages.length === 0 && !loading && !historyLoading && (
               <div style={{
                 flex: 1, display: 'flex', flexDirection: 'column',
                 alignItems: 'center', justifyContent: 'center',
@@ -557,7 +714,9 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 </div>
               </div>
             )}
+
             {messages.map(m => <MessageBubble key={m.id} role={m.role} content={m.content} />)}
+
             {isTyping && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{
@@ -628,13 +787,10 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
           </div>
 
           {/* ── 缩放把手 ─────────────────────────────────── */}
-          {/* 右边缘 */}
           <div onMouseDown={startResize('right')}
             style={{ position: 'absolute', right: 0, top: 14, bottom: 14, width: 6, cursor: 'ew-resize', zIndex: 10 }} />
-          {/* 下边缘 */}
           <div onMouseDown={startResize('bottom')}
             style={{ position: 'absolute', bottom: 0, left: 14, right: 14, height: 6, cursor: 'ns-resize', zIndex: 10 }} />
-          {/* 右下角（带视觉标记） */}
           <div onMouseDown={startResize('corner')}
             style={{
               position: 'absolute', right: 0, bottom: 0, width: 16, height: 16,
@@ -647,7 +803,6 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
       {/* ── 闲置气泡提示（方向自适应） ───────────────────────── */}
       {showBubble && !isOpen && (
         bubbleRight ? (
-          // 按钮偏左 → 气泡向右弹出，左箭头指向按钮
           <div className="ai-bubble-enter-right" style={{
             position: 'fixed',
             left: pos.x + BTN_SIZE + 4,
@@ -663,7 +818,6 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
             <div style={BUBBLE_TEXT}>有什么问题？可以来问我</div>
           </div>
         ) : (
-          // 按钮偏右 → 气泡向左弹出，右箭头指向按钮
           <div className="ai-bubble-enter-left" style={{
             position: 'fixed',
             left: pos.x - BUBBLE_W - 4,
@@ -694,7 +848,6 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
           zIndex: 1000,
           cursor: btnDrag.current.active ? 'grabbing' : 'grab',
           userSelect: 'none',
-          // 吸附时启用弹性过渡动画（仅 X 轴）
           transition: isSnapping
             ? `left ${SNAP_MS}ms cubic-bezier(0.34,1.56,0.64,1)`
             : 'none',
@@ -735,4 +888,3 @@ const BUBBLE_TEXT = {
 }
 
 export default AIAssistant
-

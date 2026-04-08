@@ -404,7 +404,7 @@ export default function Toolbar({ projectName = '未命名项目', canvasWidth, 
               { key: 'vertical', icon: <ApartmentOutlined />, label: '竖向树形' },
               { key: 'horizontal', icon: <ApartmentOutlined />, label: '横向树形' },
               { key: 'grid', icon: <ApartmentOutlined />, label: '均匀网格' },
-              { key: 'force', icon: <ApartmentOutlined />, label: '力导向（复杂连接）' },
+              // { key: 'force', icon: <ApartmentOutlined />, label: '力导向（复杂连接）' },
             ],
             onClick: ({ key }) => handleApplyLayout(key),
           }}

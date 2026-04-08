@@ -142,55 +142,86 @@ export function computeHorizontalLayout(nodes, edges, canvasHeight = 800, hidden
 export function computeGridLayout(nodes, edges) {
   if (!nodes || nodes.length === 0) return nodes
 
-  const NODE_W = 120
-  const NODE_H = 60
-  const GAP = 170
   const PAD_X = 90
   const PAD_Y = 70
+  const GAP_X = 40   // horizontal gap between nodes
+  const GAP_Y = 50   // vertical gap between nodes
 
   const { order } = bfsOrderAndLevels(nodes, edges)
-  const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)))
-  const result = nodes.map(n => ({ ...n }))
+  const cols = Math.max(2, Math.ceil(Math.sqrt(nodes.length)))
+  const numRows = Math.ceil(nodes.length / cols)
+
+  // Assign actual dimensions first
+  const result = nodes.map(n => ({
+    ...n,
+    width:  n.width  || (n.type === 'gate' ? 56 : 120),
+    height: n.height || (n.type === 'gate' ? 56 : 60),
+  }))
   const idToNode = {}
   result.forEach(n => { idToNode[n.id] = n })
+
+  // Per-column max width and per-row max height for size-aware spacing
+  const colWidths  = new Array(cols).fill(0)
+  const rowHeights = new Array(numRows).fill(0)
 
   order.forEach((id, index) => {
     const node = idToNode[id]
     if (!node) return
-    const col = index % columns
-    const row = Math.floor(index / columns)
-    node.x = PAD_X + col * GAP
-    node.y = PAD_Y + row * GAP
-    node.width = node.width || NODE_W
-    node.height = node.height || NODE_H
+    const col = index % cols
+    const row = Math.floor(index / cols)
+    colWidths[col]  = Math.max(colWidths[col],  node.width)
+    rowHeights[row] = Math.max(rowHeights[row], node.height)
+  })
+
+  // Prefix-sum positions — each column/row starts after the previous one
+  const colX = [PAD_X]
+  for (let c = 1; c < cols; c++) colX.push(colX[c - 1] + colWidths[c - 1] + GAP_X)
+  const rowY = [PAD_Y]
+  for (let r = 1; r < numRows; r++) rowY.push(rowY[r - 1] + rowHeights[r - 1] + GAP_Y)
+
+  order.forEach((id, index) => {
+    const node = idToNode[id]
+    if (!node) return
+    const col = index % cols
+    const row = Math.floor(index / cols)
+    node.x = colX[col]
+    node.y = rowY[row]
   })
 
   return result
 }
 
-export function computeForceLayout(nodes, edges, iterations = 120) {
+export function computeForceLayout(nodes, edges, iterations = 200) {
   if (!nodes || nodes.length === 0) return nodes
 
   const NODE_W = 120
   const NODE_H = 60
-  const areaW = 1200
-  const areaH = 900
   const n = nodes.length
+
+  // Scale simulation area with node count — fixed 1200×900 causes crowding for large graphs
+  const areaW = Math.max(1200, n * 120)
+  const areaH = Math.max(900,  n * 90)
   const k = Math.sqrt((areaW * areaH) / Math.max(1, n))
   let temperature = Math.max(areaW, areaH) / 10
 
+  // Grid-based initial placement — far less crowded than a fixed-radius circle
+  const initCols = Math.ceil(Math.sqrt(n))
+  const initGapX = areaW / (initCols + 1)
+  const initGapY = areaH / (Math.ceil(n / initCols) + 1)
+
   const sim = nodes.map((node, i) => {
-    const angle = (Math.PI * 2 * i) / Math.max(1, n)
-    const fallbackX = areaW / 2 + Math.cos(angle) * 160
-    const fallbackY = areaH / 2 + Math.sin(angle) * 160
+    const col = i % initCols
+    const row = Math.floor(i / initCols)
+    const w = node.width  || (node.type === 'gate' ? 56 : NODE_W)
+    const h = node.height || (node.type === 'gate' ? 56 : NODE_H)
     return {
       ...node,
-      x: Number.isFinite(node.x) ? node.x : fallbackX,
-      y: Number.isFinite(node.y) ? node.y : fallbackY,
+      x: Number.isFinite(node.x) ? node.x : initGapX * (col + 1),
+      y: Number.isFinite(node.y) ? node.y : initGapY * (row + 1),
       dx: 0,
       dy: 0,
-      width: node.width || NODE_W,
-      height: node.height || NODE_H,
+      width: w,
+      height: h,
     }
   })
 
@@ -200,39 +231,37 @@ export function computeForceLayout(nodes, edges, iterations = 120) {
   for (let iter = 0; iter < iterations; iter++) {
     sim.forEach(node => { node.dx = 0; node.dy = 0 })
 
+    // Size-aware repulsion: extra kick when bounding boxes would overlap
     for (let i = 0; i < sim.length; i++) {
       for (let j = i + 1; j < sim.length; j++) {
-        const a = sim[i]
-        const b = sim[j]
+        const a = sim[i]; const b = sim[j]
         const vx = a.x - b.x
         const vy = a.y - b.y
         const dist = Math.max(0.01, Math.hypot(vx, vy))
-        const force = (k * k) / dist
+        // Minimum safe distance ≈ mean half-diagonal of both nodes + margin
+        const minDist = (a.width + b.width + a.height + b.height) / 4 + 30
+        let force = (k * k) / dist
+        if (dist < minDist) force += (minDist - dist) * 3  // collision penalty
         const fx = (vx / dist) * force
         const fy = (vy / dist) * force
-        a.dx += fx
-        a.dy += fy
-        b.dx -= fx
-        b.dy -= fy
+        a.dx += fx; a.dy += fy
+        b.dx -= fx; b.dy -= fy
       }
     }
 
+    // Spring attraction along edges
     edges.forEach(edge => {
       const si = idToIndex[edge.from]
       const ti = idToIndex[edge.to]
       if (si === undefined || ti === undefined) return
-      const s = sim[si]
-      const t = sim[ti]
-      const vx = s.x - t.x
-      const vy = s.y - t.y
+      const s = sim[si]; const t = sim[ti]
+      const vx = s.x - t.x; const vy = s.y - t.y
       const dist = Math.max(0.01, Math.hypot(vx, vy))
       const force = (dist * dist) / Math.max(1, k)
       const fx = (vx / dist) * force
       const fy = (vy / dist) * force
-      s.dx -= fx
-      s.dy -= fy
-      t.dx += fx
-      t.dy += fy
+      s.dx -= fx; s.dy -= fy
+      t.dx += fx; t.dy += fy
     })
 
     sim.forEach(node => {
@@ -240,21 +269,45 @@ export function computeForceLayout(nodes, edges, iterations = 120) {
       const limit = Math.min(disp, temperature)
       node.x += (node.dx / disp) * limit
       node.y += (node.dy / disp) * limit
-      node.x = Math.max(40, Math.min(areaW - 40, node.x))
-      node.y = Math.max(40, Math.min(areaH - 40, node.y))
+      node.x = Math.max(node.width  / 2 + 20, Math.min(areaW - node.width  / 2 - 20, node.x))
+      node.y = Math.max(node.height / 2 + 20, Math.min(areaH - node.height / 2 - 20, node.y))
     })
 
-    temperature *= 0.96
+    temperature *= 0.97
   }
 
+  // Post-simulation explicit overlap removal (up to 10 passes, like WebCoLa's constraint solver)
+  const PAD = 15
+  for (let pass = 0; pass < 10; pass++) {
+    let moved = false
+    for (let i = 0; i < sim.length; i++) {
+      for (let j = i + 1; j < sim.length; j++) {
+        const a = sim[i]; const b = sim[j]
+        const ox = (a.width  + b.width)  / 2 + PAD - Math.abs(a.x - b.x)
+        const oy = (a.height + b.height) / 2 + PAD - Math.abs(a.y - b.y)
+        if (ox > 0 && oy > 0) {
+          // Push along the axis of minimum overlap (same as resolveOverlaps)
+          if (ox <= oy) {
+            const half = ox / 2; const dir = a.x <= b.x ? -1 : 1
+            a.x += dir * half; b.x -= dir * half
+          } else {
+            const half = oy / 2; const dir = a.y <= b.y ? -1 : 1
+            a.y += dir * half; b.y -= dir * half
+          }
+          moved = true
+        }
+      }
+    }
+    if (!moved) break
+  }
+
+  // Center the result
   const xs = sim.map(n0 => n0.x)
   const ys = sim.map(n0 => n0.y)
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2
   const cy = (Math.min(...ys) + Math.max(...ys)) / 2
-  const targetX = 450
-  const targetY = 300
-  const shiftX = targetX - cx
-  const shiftY = targetY - cy
+  const shiftX = 450 - cx
+  const shiftY = 300 - cy
 
   return sim.map(node => ({
     ...node,

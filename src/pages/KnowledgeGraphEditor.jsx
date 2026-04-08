@@ -4,7 +4,7 @@
  *   KnowledgeStoreProvider > KnowledgeEditorInner
  * 数据通过后端 API 持久化（/api/v1/knowledge-graphs/{id}/graph）
  */
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { message, Spin } from 'antd'
 import { KnowledgeStoreProvider, useKnowledgeStore, useKnowledgeActions } from '../store/useKnowledgeStore'
@@ -51,12 +51,6 @@ function KnowledgeEditorInner({ kgId, kgName }) {
   const aiAssistantRef = useRef(null)
   // 适应屏幕引用：由 KgCanvas 暴露，供工具栏排版后、初始加载后自动调用
   const fitRef = useRef(null)
-
-  // 为 AI 助手提供当前图数据上下文
-  const getContext = useCallback(() => ({
-    nodes: rfNodes,
-    edges: rfEdges,
-  }), [rfNodes, rfEdges])
 
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [propsCollapsed, setPropsCollapsed] = useState(false)
@@ -124,7 +118,7 @@ function KnowledgeEditorInner({ kgId, kgName }) {
         <KgPropertiesPanel collapsed={propsCollapsed} onCollapsedChange={setPropsCollapsed} />
       </div>
       <KgStatusBar />
-      <AIAssistant ref={aiAssistantRef} contextType="knowledgeGraph" getContext={getContext} />
+      <AIAssistant ref={aiAssistantRef} contextType="knowledgeGraph" projectId={kgId} />
     </div>
   )
 }

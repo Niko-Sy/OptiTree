@@ -1,4 +1,4 @@
-import { get, post, postStream, ApiError } from './apiClient'
+import { get, post } from './apiClient'
 import { createVersion } from './collaborationService'
 
 const QUICK_QUESTIONS = {
@@ -18,45 +18,6 @@ export function getQuickQuestions(contextType = 'faultTree') {
   return QUICK_QUESTIONS[contextType] || QUICK_QUESTIONS.faultTree
 }
 
-export async function chatWithAI(context, contextType, message, { onChunk, signal } = {}) {
-  let reply = ''
-  let doneMeta = null
-
-  await postStream('/api/v1/ai/chat/stream', {
-    context: context || { nodes: [], edges: [] },
-    contextType,
-    message,
-  }, {
-    signal,
-    onEvent: (event) => {
-      if (event?.type === 'content') {
-        const chunk = event.content || ''
-        reply += chunk
-        onChunk?.(chunk, { reply })
-        return
-      }
-
-      if (event?.type === 'error') {
-        throw new ApiError(event.message || 'AI 服务暂不可用', {
-          code: event.code,
-          details: event,
-        })
-      }
-
-      if (event?.type === 'done') {
-        doneMeta = event
-      }
-    },
-  })
-
-  return { reply, meta: doneMeta }
-}
-
-export async function getAiModels() {
-  const data = await get('/api/v1/ai/models')
-  if (Array.isArray(data)) return data
-  return data?.list || data?.models || []
-}
 
 export async function uploadDocuments(files, options = {}) {
   const form = new FormData()
@@ -90,19 +51,17 @@ function normalizeTaskResponse(data, fallbackProjectId) {
   }
 }
 
-export function generateFaultTree(docIds, topEvent, config = {}, projectId) {
+export function generateFaultTree(docIds, topEvent, projectId) {
   return post('/api/v1/ai/fault-trees/generate', {
     docIds,
     topEvent,
-    config,
     ...(projectId ? { projectId } : {}),
   }).then((data) => normalizeTaskResponse(data, projectId))
 }
 
-export function generateKnowledgeGraph(docIds, config = {}, projectId) {
+export function generateKnowledgeGraph(docIds, projectId) {
   return post('/api/v1/ai/knowledge-graphs/generate', {
     docIds,
-    config,
     ...(projectId ? { projectId } : {}),
   }).then((data) => normalizeTaskResponse(data, projectId))
 }

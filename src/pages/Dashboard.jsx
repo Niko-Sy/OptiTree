@@ -456,9 +456,9 @@ export default function Dashboard() {
     try {
       let data
       if (payload.type === 'kg') {
-        data = await generateKnowledgeGraph(payload.docIds, payload.config, project.id)
+        data = await generateKnowledgeGraph(payload.docIds, project.id)
       } else {
-        data = await generateFaultTree(payload.docIds, payload.topEvent, payload.config, project.id)
+        data = await generateFaultTree(payload.docIds, payload.topEvent, project.id)
       }
 
       setTaskMetaByProject(prev => ({
@@ -1084,7 +1084,7 @@ function TaskCenterPanel({
         )}
 
         {!loading && rows.length === 0 && (
-          <div className="bg-gray-50 rounded-lg py-8">
+          <div className="bg-gray-50 rounded-lg py-1">
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description={<span className="text-gray-500">当前筛选条件下暂无任务</span>}
