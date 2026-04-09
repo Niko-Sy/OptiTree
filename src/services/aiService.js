@@ -5,7 +5,7 @@ const QUICK_QUESTIONS = {
   faultTree: [
     { id: 'ft-1', label: '关键薄弱点', question: '这个故障树的关键薄弱点在哪里？' },
     { id: 'ft-2', label: '降低故障率', question: '如何降低顶事件发生概率？' },
-    { id: 'ft-3', label: '检查中间事件', question: '是否存在冗余或缺失的中间事件？' },
+    { id: 'ft-3', label: '逻辑校验', question: '故障树是否存在逻辑问题或矛盾？' },
   ],
   knowledgeGraph: [
     { id: 'kg-1', label: '核心实体', question: '当前知识图谱的核心实体有哪些？' },

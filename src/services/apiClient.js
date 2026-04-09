@@ -6,6 +6,7 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '')
   .replace(/\/api\/v1$/, '')
 
 const AUTH_EXPIRED_EVENT = 'optitree:auth-expired'
+const AUTH_BIZ_ERROR_CODES = new Set([40100, 40101])
 
 let refreshPromise = null
 
@@ -44,6 +45,47 @@ function emitAuthExpired() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT))
   }
+}
+
+function normalizeErrorCode(code) {
+  if (typeof code === 'number' && Number.isFinite(code)) {
+    return code
+  }
+  if (typeof code === 'string' && code.trim()) {
+    const parsed = Number(code)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return null
+}
+
+function isAuthBusinessCode(code) {
+  const normalized = normalizeErrorCode(code)
+  return normalized != null && AUTH_BIZ_ERROR_CODES.has(normalized)
+}
+
+function isPublicAuthPath(path = '') {
+  return path === '/api/v1/auth/login' || path === '/api/v1/auth/register'
+}
+
+async function readBusinessCode(response) {
+  const contentType = response.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) return null
+
+  const text = await response.clone().text().catch(() => '')
+  if (!text) return null
+
+  try {
+    const parsed = JSON.parse(text)
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'code')) {
+      return parsed.code
+    }
+  } catch {
+    // ignore non-JSON or malformed bodies
+  }
+
+  return null
 }
 
 export function onAuthExpired(handler) {
@@ -154,9 +196,23 @@ async function refreshAccessToken() {
 }
 
 async function shouldRetryWithRefresh(response, options = {}) {
-  if (response.status !== 401) return false
-  if (options.retryOnAuth === false) return false
-  if (!tokenStore.getRefresh()) return false
+  const { retryOnAuth = true, requestPath = '' } = options
+  if (!retryOnAuth) return false
+  if (isPublicAuthPath(requestPath)) return false
+
+  let authFailed = response.status === 401
+  if (!authFailed && response.ok) {
+    const businessCode = await readBusinessCode(response)
+    authFailed = isAuthBusinessCode(businessCode)
+  }
+
+  if (!authFailed) return false
+
+  if (!tokenStore.getRefresh()) {
+    tokenStore.clearAll()
+    emitAuthExpired()
+    return false
+  }
 
   await refreshAccessToken()
   return true
@@ -188,7 +244,7 @@ async function request(method, path, body, options = {}) {
     signal,
   })
 
-  if (await shouldRetryWithRefresh(response, { retryOnAuth })) {
+  if (await shouldRetryWithRefresh(response, { retryOnAuth, requestPath: path })) {
     return request(method, path, body, { ...options, retryOnAuth: false })
   }
 
@@ -252,7 +308,7 @@ export async function postStream(path, body, { onEvent, signal, retryOnAuth = tr
     signal,
   })
 
-  if (await shouldRetryWithRefresh(response, { retryOnAuth })) {
+  if (await shouldRetryWithRefresh(response, { retryOnAuth, requestPath: path })) {
     return postStream(path, body, { onEvent, signal, retryOnAuth: false })
   }
 
