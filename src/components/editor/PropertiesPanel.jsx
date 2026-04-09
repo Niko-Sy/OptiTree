@@ -340,7 +340,7 @@ export default function PropertiesPanel({ collapsed, onCollapsedChange }) {
               <>
                 <Divider style={{ margin: '0 0 8px 0' }}>
                   <span className="text-xs text-gray-500 flex items-center gap-1">
-                    <RobotOutlined /> AI 校验报告
+                    逻辑校验报告
                   </span>
                 </Divider>
                 <div className="space-y-2">

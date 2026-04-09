@@ -26,7 +26,7 @@ export default function StatusBar() {
           <>
             <WarningOutlined className="text-yellow-500" />
             <span className="text-yellow-600">
-              AI 校验：{errors > 0 ? `${errors} 个错误` : ''}
+              逻辑校验：{errors > 0 ? `${errors} 个错误` : ''}
               {errors > 0 && warnings > 0 ? '，' : ''}
               {warnings > 0 ? `${warnings} 个警告` : ''}
             </span>
