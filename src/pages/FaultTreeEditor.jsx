@@ -41,7 +41,7 @@ function hasBlockingTaskMeta(projectId) {
 function EditorInner({ projectId, project, onProjectUpdated }) {
   const nodes = _useRawStore(s => s.nodes, shallow)
   const edges = _useRawStore(s => s.edges, shallow)
-  const { setGraph } = useEditorActions()
+  const { setGraph, setRevision } = useEditorActions()
 
   const canvasWidthRef = useRef(null)
   // AI 助手引用：由工具栏按钮触发弹出
@@ -55,6 +55,16 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
   const rightOffset = propsPanelCollapsed ? 0 : 256
   const leftOffset = paletteCollapsed ? 0 : 208
 
+  useEffect(() => {
+    const handleShowNodeDetail = () => {
+      setPropsPanelCollapsed(false)
+    }
+    window.addEventListener('agent:show-node-detail', handleShowNodeDetail)
+    return () => {
+      window.removeEventListener('agent:show-node-detail', handleShowNodeDetail)
+    }
+  }, [])
+
   // 加载初始化标志 & 自动保存状态追踪
   const initDoneRef  = useRef(false)
   const revisionRef  = useRef(null)
@@ -67,6 +77,7 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
     getFaultTreeGraph(projectId)
       .then(({ nodes, edges, revision }) => {
         revisionRef.current = revision ?? null
+        setRevision(revision ?? null)
         const n = nodes || []
         const e = edges || []
         // 如果所有节点坐标为 0（模板导入后未排版），自动排版
@@ -84,6 +95,7 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
         if (err?.code !== 404) {
           message.error(err?.message || '加载图数据失败')
         }
+        setRevision(null)
         initDoneRef.current = true
       })
   }, [projectId]) // eslint-disable-line
@@ -102,7 +114,10 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
           edges,
           revision: revisionRef.current,
         })
-        if (res?.revision != null) revisionRef.current = res.revision
+        if (res?.revision != null) {
+          revisionRef.current = res.revision
+          setRevision(res.revision)
+        }
         lastSavedRef.current = snap
       } catch {
         // 静默失败，下次变更时重试
@@ -110,7 +125,7 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
     }, 1500)
 
     return () => clearTimeout(saveTimerRef.current)
-  }, [nodes, edges, projectId])
+  }, [nodes, edges, projectId, setRevision])
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -119,6 +134,7 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
         projectId={projectId}
         project={project}
         onProjectUpdated={onProjectUpdated}
+        // eslint-disable-next-line react-hooks/refs
         canvasWidth={canvasWidthRef.current?.() || 900}
         aiAssistantRef={aiAssistantRef}
         fitRef={fitRef}

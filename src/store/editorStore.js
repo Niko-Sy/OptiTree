@@ -17,8 +17,22 @@ function pushHistory(state) {
   return { history: newHistory, historyIndex: newHistory.length - 1 }
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function asId(value) {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
+}
+
+function normalizeRevision(value) {
+  return Number.isFinite(value) ? Math.trunc(value) : null
+}
+
 // ─── Store ────────────────────────────────────────────────────────
-export const useEditorStore = create((set, get) => ({
+export const useEditorStore = create((set) => ({
   // ── State shape (identical to old store) ──────────────────────
   nodes: [],
   edges: [],
@@ -30,6 +44,7 @@ export const useEditorStore = create((set, get) => ({
   history: [],
   historyIndex: -1,
   aiIssues: [],
+  revision: null,
 
   // ── Actions ───────────────────────────────────────────────────
 
@@ -38,8 +53,104 @@ export const useEditorStore = create((set, get) => ({
     return { ...next, ...pushHistory({ ...state, ...next }) }
   }),
 
+  setRevision: (revision) => set({ revision: normalizeRevision(revision) }),
+
   // 静默更新位置和连线锚点，不写入撤销历史（用于折叠/展开后自动重排）
   updateGraphSilent: (nodes, edges) => set(() => ({ nodes, edges })),
+
+  // 统一应用 Agent 返回的图补丁（写入撤销历史）
+  applyGraphPatch: (patch) => set((state) => {
+    const upsertNodes = asArray(patch?.upsertNodes)
+    const deleteNodes = asArray(patch?.deleteNodes)
+    const upsertEdges = asArray(patch?.upsertEdges)
+    const deleteEdges = asArray(patch?.deleteEdges)
+
+    if (!upsertNodes.length && !deleteNodes.length && !upsertEdges.length && !deleteEdges.length) {
+      return {}
+    }
+
+    const deletedNodeIdSet = new Set(
+      deleteNodes
+        .map(item => (typeof item === 'object' && item ? asId(item.id) : asId(item)))
+        .filter(Boolean)
+    )
+
+    const deletedEdgeIdSet = new Set(
+      deleteEdges
+        .map(item => (typeof item === 'object' && item ? asId(item.id) : asId(item)))
+        .filter(Boolean)
+    )
+
+    const nodeMap = new Map()
+    state.nodes.forEach((node) => {
+      if (!deletedNodeIdSet.has(node.id)) {
+        nodeMap.set(node.id, node)
+      }
+    })
+
+    upsertNodes.forEach((item) => {
+      if (!item || typeof item !== 'object') return
+      const id = asId(item.id)
+      if (!id) return
+      const prev = nodeMap.get(id)
+      const type = item.type || prev?.type
+      nodeMap.set(id, {
+        ...(prev || {}),
+        ...item,
+        id,
+        width: item.width ?? prev?.width ?? (type === 'gate' ? 56 : 120),
+        height: item.height ?? prev?.height ?? (type === 'gate' ? 56 : 60),
+      })
+    })
+
+    const nextNodes = Array.from(nodeMap.values())
+
+    const edgeMap = new Map()
+    state.edges.forEach((edge) => {
+      if (deletedEdgeIdSet.has(edge.id)) return
+      if (deletedNodeIdSet.has(edge.from) || deletedNodeIdSet.has(edge.to)) return
+      edgeMap.set(edge.id, edge)
+    })
+
+    upsertEdges.forEach((item, index) => {
+      if (!item || typeof item !== 'object') return
+      const from = asId(item.from)
+      const to = asId(item.to)
+      if (!from || !to) return
+      if (deletedNodeIdSet.has(from) || deletedNodeIdSet.has(to)) return
+
+      const id = asId(item.id) || `e_patch_${Date.now()}_${index}`
+      const prev = edgeMap.get(id)
+      edgeMap.set(id, {
+        ...(prev || {}),
+        ...item,
+        id,
+        from,
+        to,
+      })
+    })
+
+    const nextEdges = Array.from(edgeMap.values()).filter((edge) => {
+      return !deletedNodeIdSet.has(edge.from) && !deletedNodeIdSet.has(edge.to)
+    })
+
+    const selectedNodeId = deletedNodeIdSet.has(state.selectedNodeId) ? null : state.selectedNodeId
+    const selectedNodeIds = state.selectedNodeIds.filter(id => !deletedNodeIdSet.has(id))
+    const nextEdgeIdSet = new Set(nextEdges.map(edge => edge.id))
+    const selectedEdgeId = (state.selectedEdgeId && nextEdgeIdSet.has(state.selectedEdgeId))
+      ? state.selectedEdgeId
+      : null
+
+    const next = {
+      nodes: nextNodes,
+      edges: nextEdges,
+      selectedNodeId,
+      selectedNodeIds,
+      selectedEdgeId,
+    }
+
+    return { ...next, ...pushHistory({ ...state, ...next }) }
+  }),
 
   setLayoutType: (layoutType) => set({ layoutType }),
 
@@ -177,7 +288,7 @@ export const useEditorStore = create((set, get) => ({
 // ─── Backwards-compatible Context API shim ─────────────────────────
 // Keeps old  useEditorStore() → { state, dispatch }  callers working
 // while new code can call useEditorStore(selector) directly.
-import { createContext, useContext } from 'react'
+import { createContext } from 'react'
 
 const EditorContext = createContext(null)
 export { EditorContext }
@@ -196,7 +307,9 @@ export function useEditorStoreLegacy() {
     const store = useEditorStore.getState()
     switch (action.type) {
       case 'SET_GRAPH':        return store.setGraph(action.nodes, action.edges)
+      case 'SET_REVISION':     return store.setRevision(action.revision)
       case 'SET_LAYOUT_TYPE':  return store.setLayoutType(action.layoutType)
+      case 'APPLY_GRAPH_PATCH': return store.applyGraphPatch(action.patch)
       case 'ADD_NODE':         return store.addNode(action.node)
       case 'UPDATE_NODE':      return store.updateNode(action.id, action.patch)
       case 'MOVE_NODE':        return store.moveNode(action.id, action.x, action.y)
@@ -227,13 +340,13 @@ export function useEditorStoreLegacy() {
 export function useEditorActions() {
   // Return bound action functions directly from the store
   const {
-    setGraph, updateGraphSilent, setLayoutType, addNode, updateNode, moveNode, commitMove,
+    setGraph, setRevision, updateGraphSilent, applyGraphPatch, setLayoutType, addNode, updateNode, moveNode, commitMove,
     deleteNode, addEdge, moveEdge, commitEdgeMove, updateEdge, deleteEdge,
     selectNode, selectEdge, deselect, setAiIssues, undo, redo,
     selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes,
   } = useEditorStore()
   return {
-    setGraph, updateGraphSilent, setLayoutType, addNode, updateNode, moveNode, commitMove,
+    setGraph, setRevision, updateGraphSilent, applyGraphPatch, setLayoutType, addNode, updateNode, moveNode, commitMove,
     deleteNode, addEdge, moveEdge, commitEdgeMove, updateEdge, deleteEdge,
     selectNode, selectEdge, deselect, setAiIssues, undo, redo,
     selectNodes, deleteNodes, moveNodes, commitMoveNodes, copyNodes, pasteNodes,

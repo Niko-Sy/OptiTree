@@ -7,8 +7,9 @@ import {
   PlusSquareOutlined, MinusSquareOutlined,
 } from '@ant-design/icons'
 import { useEditorStore as _useRawStore, useEditorActions, shallow } from '../../store/editorStore'
-import { useEditorStore } from '../../store/useEditorStore'
+import { useAgentUIStore } from '../../store/useAgentUIStore'
 import { GateSymbol, GATE_CONFIG } from './GateSymbol'
+import HybridPreviewOverlay from './HybridPreviewOverlay'
 import { selectAnchorsByLayout, computeLayout, computeHorizontalLayout } from '../../utils/layoutAlgorithm'
 
 const MIN_SCALE = 0.30
@@ -52,6 +53,7 @@ const FaultNode = memo(function FaultNode({
   node, selected, multiSelected, isConnectFrom, mode,
   onMouseDown, onClick, onContextMenu, onDragStart, onHandleClick,
   hasChildren, isCollapsed, onToggleCollapse, nodeRef,
+  agentHighlightClass,
 }) {
   const typeClass = {
     topEvent: 'top-event', midEvent: 'mid-event',
@@ -70,10 +72,27 @@ const FaultNode = memo(function FaultNode({
     gap: 2,
   } : {}
 
+  const agentHighlightStyle = agentHighlightClass === 'agent-warning'
+    ? {
+      outline: '2.5px solid #fa8c16',
+      boxShadow: '0 0 0 4px rgba(250,140,22,0.2)',
+    }
+    : agentHighlightClass === 'agent-error'
+      ? {
+        outline: '2.5px solid #ff4d4f',
+        boxShadow: '0 0 0 4px rgba(255,77,79,0.2)',
+      }
+      : agentHighlightClass === 'agent-primary'
+        ? {
+          outline: '2.5px solid #1677ff',
+          boxShadow: '0 0 0 4px rgba(22,119,255,0.16)',
+        }
+        : {}
+
   return (
     <div
       ref={nodeRef}
-      className={`fault-node ${typeClass} ${selected ? 'selected' : ''}`}
+      className={`fault-node ${typeClass} ${selected ? 'selected' : ''} ${agentHighlightClass || ''}`}
       draggable
       style={{
         left: node.x - node.width / 2,
@@ -83,6 +102,7 @@ const FaultNode = memo(function FaultNode({
         cursor: mode === 'pan' ? 'grab' : mode === 'connect' ? 'crosshair' : 'pointer',
         outline: isConnectFrom ? '2.5px solid #7c3aed' : multiSelected ? '2.5px dashed #1677ff' : undefined,
         boxShadow: isConnectFrom ? '0 0 0 4px rgba(124,58,237,0.2)' : multiSelected ? '0 0 0 4px rgba(22,119,255,0.15)' : undefined,
+        ...agentHighlightStyle,
         ...gateStyle,
       }}
       onMouseDown={e => onMouseDown(e, node)}
@@ -433,6 +453,11 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
   const selectedNodeIds  = _useRawStore(s => s.selectedNodeIds, shallow)
   const clipboard        = _useRawStore(s => s.clipboard)
   const layoutType       = _useRawStore(s => s.layoutType)
+  const highlightMap = useAgentUIStore(s => s.highlightMap)
+  const annotations = useAgentUIStore(s => s.annotations)
+  const layoutPreview = useAgentUIStore(s => s.layoutPreview)
+  const pendingPreview = useAgentUIStore(s => s.pendingPreview)
+  const registerFitNodeIntoView = useAgentUIStore(s => s.registerFitNodeIntoView)
   // Build a state-like object so ContextMenu and other legacy consumers still work
   const state = { nodes, edges, selectedNodeId, selectedEdgeId, selectedNodeIds, clipboard, layoutType }
 
@@ -666,8 +691,82 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
     animateTo({ scale: sc, x: lOff + (usableW - (minX + maxX) * sc) / 2, y: (rect.height - (minY + maxY) * sc) / 2 })
   }, [animateTo])
 
+  const fitToNode = useCallback((nodeId, zoom = 1.2) => {
+    if (!containerRef.current || typeof nodeId !== 'string' || !nodeId) return
+
+    const node = stateRef.current.nodes.find(n => n.id === nodeId)
+    if (!node) return
+
+    const rect = containerRef.current.getBoundingClientRect()
+    const lOff = leftOffsetRef.current
+    const rOff = rightOffsetRef.current
+    const usableW = rect.width - lOff - rOff
+    const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number.isFinite(zoom) ? zoom : 1.2))
+
+    const nodeCenterX = node.x
+    const nodeCenterY = node.y + node.height / 2
+
+    animateTo({
+      scale,
+      x: lOff + usableW / 2 - nodeCenterX * scale,
+      y: rect.height / 2 - nodeCenterY * scale,
+    })
+    selectNode(nodeId)
+  }, [animateTo, selectNode])
+
   // 暴露 fitToScreen 给外部调用（排版后、初始加载后自动触发）
   if (fitRef) fitRef.current = fitToScreen
+
+  useEffect(() => {
+    registerFitNodeIntoView((nodeId, zoom) => {
+      fitToNode(nodeId, zoom)
+    })
+    return () => {
+      registerFitNodeIntoView(null)
+    }
+  }, [fitToNode, registerFitNodeIntoView])
+
+  useEffect(() => {
+    const onLocateNode = (event) => {
+      fitToNode(event?.detail?.nodeId, event?.detail?.zoom)
+    }
+
+    const onExpandNode = (event) => {
+      const nodeId = event?.detail?.nodeId
+      if (typeof nodeId !== 'string' || !nodeId) return
+      manualCollapseRef.current = true
+      lastToggledNodeIdRef.current = nodeId
+      setCollapsedNodes((prev) => {
+        if (!prev.has(nodeId)) return prev
+        const next = new Set(prev)
+        next.delete(nodeId)
+        return next
+      })
+    }
+
+    const onCollapseNode = (event) => {
+      const nodeId = event?.detail?.nodeId
+      if (typeof nodeId !== 'string' || !nodeId) return
+      manualCollapseRef.current = true
+      lastToggledNodeIdRef.current = nodeId
+      setCollapsedNodes((prev) => {
+        if (prev.has(nodeId)) return prev
+        const next = new Set(prev)
+        next.add(nodeId)
+        return next
+      })
+    }
+
+    window.addEventListener('agent:locate-node', onLocateNode)
+    window.addEventListener('agent:expand-node', onExpandNode)
+    window.addEventListener('agent:collapse-node', onCollapseNode)
+
+    return () => {
+      window.removeEventListener('agent:locate-node', onLocateNode)
+      window.removeEventListener('agent:expand-node', onExpandNode)
+      window.removeEventListener('agent:collapse-node', onCollapseNode)
+    }
+  }, [fitToNode])
 
   // ── Keyboard shortcuts ───────────────────────────────────────
   useEffect(() => {
@@ -1277,6 +1376,60 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
         className="absolute top-0 left-0 origin-top-left"
         style={{ transform: `translate(${vt.x}px,${vt.y}px) scale(${vt.scale})`, zIndex: 10 }}
       >
+        {Array.isArray(layoutPreview?.nodes) && layoutPreview.nodes.map((previewNode) => {
+          const current = nodeMap[previewNode?.id]
+          if (!current || hiddenNodeIds.has(current.id)) return null
+
+          const ghostWidth = previewNode.width || current.width
+          const ghostHeight = previewNode.height || current.height
+          const ghostX = Number.isFinite(previewNode.x) ? previewNode.x : current.x
+          const ghostY = Number.isFinite(previewNode.y) ? previewNode.y : current.y
+
+          return (
+            <div
+              key={`layout-preview-${current.id}`}
+              className="agent-layout-preview"
+              style={{
+                position: 'absolute',
+                left: ghostX - ghostWidth / 2,
+                top: ghostY,
+                width: ghostWidth,
+                height: ghostHeight,
+              }}
+            />
+          )
+        })}
+
+        {Object.entries(annotations).map(([nodeId, annotation]) => {
+          const node = nodeMap[nodeId]
+          if (!node || hiddenNodeIds.has(nodeId)) return null
+
+          const styleMap = {
+            warning: { border: '#fa8c16', background: '#fff7e6', color: '#873800' },
+            error: { border: '#ff4d4f', background: '#fff2f0', color: '#a8071a' },
+            info: { border: '#1677ff', background: '#e6f4ff', color: '#0050b3' },
+          }
+          const styleType = styleMap[annotation?.style] ? annotation.style : 'info'
+          const styleToken = styleMap[styleType]
+
+          return (
+            <div
+              key={`agent-ann-${nodeId}`}
+              className="agent-node-annotation"
+              style={{
+                position: 'absolute',
+                left: node.x + node.width / 2 + 8,
+                top: node.y - 10,
+                borderColor: styleToken.border,
+                background: styleToken.background,
+                color: styleToken.color,
+              }}
+            >
+              {annotation?.text || ''}
+            </div>
+          )
+        })}
+
         {visibleNodes.map(node => (
           <FaultNode
             key={node.id} node={node}
@@ -1293,9 +1446,30 @@ export default function Canvas({ onSizeRef, rightOffset = 0, leftOffset = 208, f
             isCollapsed={collapsedNodes.has(node.id)}
             onToggleCollapse={toggleCollapse}
             nodeRef={el => el ? nodeDomRefs.current.set(node.id, el) : nodeDomRefs.current.delete(node.id)}
+            agentHighlightClass={highlightMap[node.id] || ''}
           />
         ))}
       </div>
+
+      {pendingPreview && (
+        <HybridPreviewOverlay
+          key={pendingPreview.callId || 'hybrid-preview'}
+          pendingPreview={pendingPreview}
+          nodeMap={nodeMap}
+          viewport={vt}
+          hiddenNodeIds={hiddenNodeIds}
+          onApply={(checkedIds, callId) => {
+            window.dispatchEvent(new CustomEvent('agent:hybrid-preview-apply', {
+              detail: { checkedIds, callId },
+            }))
+          }}
+          onDiscard={(callId) => {
+            window.dispatchEvent(new CustomEvent('agent:hybrid-preview-discard', {
+              detail: { callId },
+            }))
+          }}
+        />
+      )}
 
       {/* Empty state */}
       {nodes.length === 0 && (

@@ -17,7 +17,7 @@
  *   - AI 回复时若面板较小自动动画展开
  */
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
-import { Input, Spin, Tag, Tooltip, Select, Modal, message } from 'antd'
+import { Alert, Input, InputNumber, Spin, Tag, Tooltip, Select, Modal, message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -32,6 +32,8 @@ import {
   ReloadOutlined,
   CopyOutlined,
   MessageOutlined,
+  DownOutlined,
+  RightOutlined,
 } from '@ant-design/icons'
 import { getQuickQuestions } from '../../services/aiService'
 import {
@@ -42,7 +44,14 @@ import {
   getConversationMessages,
   sendMessage,
   sendMessageStream,
+  sendAgentStream,
+  confirmAgentAction,
+  cancelAgentSession,
+  getAgentSessionStatus,
 } from '../../services/assistantService'
+import { executeClientTool } from '../../utils/clientToolExecutor'
+import { useEditorStore as editorStore } from '../../store/editorStore'
+import { useAgentUIStore } from '../../store/useAgentUIStore'
 
 // ─── 布局常量 ────────────────────────────────────────────────────────
 const TOP_NAV_H           = 56
@@ -56,10 +65,56 @@ const PANEL_MIN_W         = 360
 const PANEL_MIN_H         = 520
 const PANEL_EXPAND_RATIO  = 0.68   // AI 回复时目标高度占视口比例
 const PANEL_EXPAND_THRESH = 0.52   // 低于该比例时触发自动展开
+const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 8
 
 const CONTEXT_LABELS = {
   faultTree:      '故障树助手',
   knowledgeGraph: '知识图谱助手',
+}
+
+const AGENT_STATE_LABELS = {
+  idle: '空闲',
+  running: '运行中',
+  paused_confirm: '等待确认',
+  paused_preview: '等待预览确认',
+  paused_iteration: '等待继续轮数',
+  done: '已完成',
+  cancelled: '已取消',
+}
+
+const AGENT_ERROR_MESSAGE_MAP = {
+  40001: '请求参数无效，请稍后重试。',
+  40009: '会话状态冲突，请刷新后重试。',
+  40310: 'Agent 触发安全策略，建议新开一轮请求。',
+  40410: 'Agent 会话不存在，请重新发起请求。',
+  40810: 'Agent 会话等待超时，请稍后重试。',
+  42910: '请求频率过高，请稍后再试。',
+}
+
+const MAX_AGENT_THINKING_STEPS = 120
+
+const AGENT_THINKING_PHASE_META = {
+  context_loaded: { label: '已加载上下文', tone: 'info' },
+  context_override: { label: '使用前端快照上下文', tone: 'info' },
+  round_start: { label: '轮次开始', tone: 'info' },
+  round_limit_reached: { label: '达到轮次上限，等待确认', tone: 'warning' },
+  round_resumed: { label: '已继续迭代', tone: 'success' },
+  round_stopped: { label: '已停止迭代', tone: 'warning' },
+  reasoning: { label: '模型思考中', tone: 'running' },
+  tool_plan: { label: '规划工具调用', tone: 'info' },
+  tool_execution: { label: '执行工具中', tone: 'running' },
+  round_summary: { label: '本轮总结', tone: 'success' },
+  context_refresh: { label: '刷新图上下文', tone: 'info' },
+  finalizing: { label: '正在收尾', tone: 'running' },
+  model_error: { label: '模型调用失败', tone: 'error' },
+}
+
+const AGENT_THINKING_TONE_META = {
+  info: { dot: '#1677ff', bg: 'rgba(22,119,255,0.08)', border: 'rgba(22,119,255,0.2)', text: '#0958d9' },
+  running: { dot: '#13a8a8', bg: 'rgba(19,168,168,0.1)', border: 'rgba(19,168,168,0.24)', text: '#006d75' },
+  success: { dot: '#52c41a', bg: 'rgba(82,196,26,0.12)', border: 'rgba(82,196,26,0.22)', text: '#389e0d' },
+  warning: { dot: '#fa8c16', bg: 'rgba(250,140,22,0.12)', border: 'rgba(250,140,22,0.22)', text: '#ad6800' },
+  error: { dot: '#ff4d4f', bg: 'rgba(255,77,79,0.12)', border: 'rgba(255,77,79,0.22)', text: '#cf1322' },
 }
 
 // ─── 响应式面板初始尺寸 ──────────────────────────────────────────────
@@ -106,24 +161,166 @@ function calcPanelPos(btnX, btnY, panelW, panelH) {
 }
 
 // ─── 会话 ID 持久化工具 ──────────────────────────────────────────────
-function getConvStorageKey(projectId, contextType) {
-  return `ai_conv_${projectId}_${contextType}`
+function getConvStorageKey(projectId, contextType, mode = 'ask') {
+  return `ai_conv_${projectId}_${contextType}_${mode}`
 }
-function getSavedConversationId(projectId, contextType) {
-  try { return localStorage.getItem(getConvStorageKey(projectId, contextType)) || null } catch { return null }
-}
-function saveConversationId(projectId, contextType, id) {
+function getSavedConversationId(projectId, contextType, mode = 'ask') {
   try {
-    localStorage.setItem(getConvStorageKey(projectId, contextType), id)
+    const keyValue = localStorage.getItem(getConvStorageKey(projectId, contextType, mode))
+    if (keyValue) return keyValue
+    if (mode === 'ask') {
+      return localStorage.getItem(`ai_conv_${projectId}_${contextType}`) || null
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+function saveConversationId(projectId, contextType, id, mode = 'ask') {
+  try {
+    localStorage.setItem(getConvStorageKey(projectId, contextType, mode), id)
+    // 兼容历史 ask 存储键，避免模式改造后丢失原会话入口
+    if (mode === 'ask') {
+      localStorage.setItem(`ai_conv_${projectId}_${contextType}`, id)
+    }
   } catch {
     // ignore storage write failures
   }
 }
-function clearConversationId(projectId, contextType) {
+function clearConversationId(projectId, contextType, mode = 'ask') {
   try {
-    localStorage.removeItem(getConvStorageKey(projectId, contextType))
+    localStorage.removeItem(getConvStorageKey(projectId, contextType, mode))
+    if (mode === 'ask') {
+      localStorage.removeItem(`ai_conv_${projectId}_${contextType}`)
+    }
   } catch {
     // ignore storage write failures
+  }
+}
+
+function getConversationModeMapKey(projectId, contextType) {
+  return `ai_conv_mode_map_${projectId}_${contextType}`
+}
+
+function getConversationModeMap(projectId, contextType) {
+  try {
+    const raw = localStorage.getItem(getConversationModeMapKey(projectId, contextType))
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function setConversationMode(projectId, contextType, conversationId, mode) {
+  if (!projectId || !contextType || !conversationId || !mode) return
+  try {
+    const next = {
+      ...getConversationModeMap(projectId, contextType),
+      [conversationId]: mode,
+    }
+    localStorage.setItem(getConversationModeMapKey(projectId, contextType), JSON.stringify(next))
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function removeConversationMode(projectId, contextType, conversationId) {
+  if (!projectId || !contextType || !conversationId) return
+  try {
+    const next = { ...getConversationModeMap(projectId, contextType) }
+    delete next[conversationId]
+    localStorage.setItem(getConversationModeMapKey(projectId, contextType), JSON.stringify(next))
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function normalizeAgentCode(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return Math.trunc(parsed)
+  }
+  return null
+}
+
+function resolveAgentErrorMessage(errorLike, fallback = '') {
+  const code = normalizeAgentCode(errorLike?.code ?? errorLike?.errorCode)
+  if (Number.isFinite(code) && AGENT_ERROR_MESSAGE_MAP[code]) {
+    return AGENT_ERROR_MESSAGE_MAP[code]
+  }
+  return errorLike?.message || errorLike?.errorMessage || fallback
+}
+
+function normalizeToolResultStatus(event) {
+  const rawStatus = typeof event?.status === 'string' ? event.status.toLowerCase() : ''
+  if (rawStatus) return rawStatus
+  if (event?.success === true) return 'success'
+  if (event?.success === false) return 'failed'
+  return 'success'
+}
+
+function getToolResultStatusLabel(status) {
+  if (status === 'failed') return '失败'
+  if (status === 'cancelled') return '已取消'
+  if (status === 'discarded') return '已放弃'
+  if (status === 'client_only') return '前端执行'
+  return '成功'
+}
+
+function normalizeThinkingPhase(phase) {
+  if (typeof phase !== 'string') return 'reasoning'
+  const normalized = phase.trim().toLowerCase()
+  return normalized || 'reasoning'
+}
+
+function resolveThinkingPhaseMeta(phase) {
+  const normalizedPhase = normalizeThinkingPhase(phase)
+  return AGENT_THINKING_PHASE_META[normalizedPhase] || {
+    label: normalizedPhase || '过程更新',
+    tone: 'info',
+  }
+}
+
+function buildThinkingMessage(event, phaseMeta) {
+  const explicitMessage = typeof event?.message === 'string' ? event.message.trim() : ''
+  if (explicitMessage) return explicitMessage
+
+  const round = Number.isFinite(event?.round) ? Math.trunc(event.round) : null
+  if (Number.isFinite(round)) {
+    return `${phaseMeta.label}（第 ${round} 轮）`
+  }
+  return phaseMeta.label
+}
+
+function formatThinkingTime(timestamp) {
+  try {
+    return new Date(timestamp).toLocaleTimeString('zh-CN', { hour12: false })
+  } catch {
+    return '--:--:--'
+  }
+}
+
+function buildAgentRequestPayload(contextType) {
+  if (contextType !== 'faultTree') {
+    return {
+      readOnly: true,
+      maxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
+    }
+  }
+
+  const graphState = editorStore.getState()
+  const nodes = Array.isArray(graphState?.nodes) ? graphState.nodes : []
+  const edges = Array.isArray(graphState?.edges) ? graphState.edges : []
+  const revision = Number.isFinite(graphState?.revision) ? Math.trunc(graphState.revision) : null
+
+  return {
+    graphSnapshot: { nodes, edges },
+    ...(Number.isFinite(revision) ? { clientRevision: revision } : {}),
+    readOnly: false,
+    maxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   }
 }
 
@@ -358,6 +555,139 @@ function MessageBubble({ role, content, isPartial }) {
   )
 }
 
+function AgentThinkingPanel({
+  steps,
+  expanded,
+  running,
+  onToggleExpand,
+}) {
+  const stepCount = Array.isArray(steps) ? steps.length : 0
+
+  return (
+    <div style={{
+      marginBottom: 10,
+      border: '1px solid rgba(22,119,255,0.18)',
+      background: 'linear-gradient(180deg, rgba(230,244,255,0.72) 0%, #fff 60%)',
+      borderRadius: 12,
+      overflow: 'hidden',
+      boxShadow: '0 6px 18px rgba(22,119,255,0.08)',
+    }}>
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        style={{
+          width: '100%',
+          border: 'none',
+          cursor: 'pointer',
+          background: 'transparent',
+          padding: '9px 10px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          textAlign: 'left',
+        }}
+      >
+        <div style={{
+          width: 18,
+          display: 'flex',
+          justifyContent: 'center',
+          color: '#6b7280',
+          flexShrink: 0,
+        }}>
+          {expanded ? <DownOutlined style={{ fontSize: 11 }} /> : <RightOutlined style={{ fontSize: 11 }} />}
+        </div>
+        <div style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}>
+          <span style={{ fontSize: 12, color: '#111827', fontWeight: 700 }}>Agent 执行轨迹</span>
+          <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>{stepCount} 步</Tag>
+          {running && (
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 10,
+              color: '#006d75',
+              background: 'rgba(19,168,168,0.1)',
+              border: '1px solid rgba(19,168,168,0.25)',
+              borderRadius: 999,
+              padding: '1px 7px',
+            }}>
+              <span className="agent-thinking-live-dot" />
+              执行中
+            </span>
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="agent-thinking-scroll" style={{
+          maxHeight: 190,
+          overflowY: 'auto',
+          padding: '2px 10px 10px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 7,
+        }}>
+          {stepCount === 0 && (
+            <div style={{
+              fontSize: 12,
+              color: '#6b7280',
+              border: '1px dashed rgba(107,114,128,0.28)',
+              borderRadius: 10,
+              padding: '8px 10px',
+              background: 'rgba(255,255,255,0.7)',
+            }}>
+              正在等待 Agent 返回过程事件...
+            </div>
+          )}
+
+          {steps.map((step) => {
+            const toneMeta = AGENT_THINKING_TONE_META[step.tone] || AGENT_THINKING_TONE_META.info
+            return (
+              <div key={step.id} style={{
+                border: `1px solid ${toneMeta.border}`,
+                background: toneMeta.bg,
+                borderRadius: 10,
+                padding: '7px 9px',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  marginBottom: 4,
+                }}>
+                  <span style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: toneMeta.dot,
+                    flexShrink: 0,
+                    boxShadow: `0 0 0 3px ${toneMeta.bg}`,
+                  }} />
+                  <span style={{ fontSize: 11, color: toneMeta.text, fontWeight: 600 }}>
+                    {step.label}
+                  </span>
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: '#9ca3af' }}>
+                    {formatThinkingTime(step.ts)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: '#1f2937', lineHeight: 1.55 }}>
+                  {step.message}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── 主组件 ──────────────────────────────────────────────────────────
 const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree', projectId }, ref) {
   const [pos,             setPos]             = useState(() => getSavedPosition())
@@ -382,7 +712,28 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
   const [nextCursor,              setNextCursor]              = useState(null)
   const [hasMoreHistory,          setHasMoreHistory]          = useState(false)
   const [streamNotice,            setStreamNotice]            = useState('')
+  const [thinkingSteps,           setThinkingSteps]           = useState([])
+  const [thinkingExpanded,        setThinkingExpanded]        = useState(true)
+  const supportsAgent = contextType === 'faultTree'
+  const [chatMode, setChatMode] = useState('ask')
+  const [continueRounds, setContinueRounds] = useState(1)
 
+  const agentState = useAgentUIStore(s => s.agentState)
+  const pendingConfirm = useAgentUIStore(s => s.pendingConfirm)
+  const pendingPreview = useAgentUIStore(s => s.pendingPreview)
+  const pendingIteration = useAgentUIStore(s => s.pendingIteration)
+  const activeSessionId = useAgentUIStore(s => s.activeSessionId)
+  const setAgentState = useAgentUIStore(s => s.setAgentState)
+  const setActiveSession = useAgentUIStore(s => s.setActiveSession)
+  const setPendingConfirm = useAgentUIStore(s => s.setPendingConfirm)
+  const clearPendingConfirm = useAgentUIStore(s => s.clearPendingConfirm)
+  const setPendingPreview = useAgentUIStore(s => s.setPendingPreview)
+  const clearPendingPreview = useAgentUIStore(s => s.clearPendingPreview)
+  const setPendingIteration = useAgentUIStore(s => s.setPendingIteration)
+  const clearPendingIteration = useAgentUIStore(s => s.clearPendingIteration)
+  const resetAgentUiState = useAgentUIStore(s => s.resetAgentUiState)
+
+  const effectiveMode = supportsAgent ? chatMode : 'ask'
   const quickQuestions  = getQuickQuestions(contextType)
   const messagesEndRef  = useRef(null)
   const inputRef        = useRef(null)
@@ -391,12 +742,52 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
   const streamStateRef  = useRef({ startedAt: 0, lastHeartbeatAt: 0 })
   const autoExpandedRef = useRef(false)
   const panelSizeRef    = useRef(panelSize)
+  const thinkingStepSeqRef = useRef(0)
 
   const btnDrag   = useRef({ active: false, startMX: 0, startMY: 0, startBX: 0, startBY: 0, moved: false })
   const resizeRef = useRef({ active: false, edge: null, startMX: 0, startMY: 0, startW: 0, startH: 0 })
 
   // 保持 panelSizeRef 同步，供 handleSend 回调读取当前尺寸
   useEffect(() => { panelSizeRef.current = panelSize }, [panelSize])
+
+  const resetThinkingTrail = useCallback(() => {
+    thinkingStepSeqRef.current = 0
+    setThinkingSteps([])
+    setThinkingExpanded(true)
+  }, [])
+
+  const appendThinkingStep = useCallback((eventLike = {}) => {
+    const phase = normalizeThinkingPhase(eventLike?.phase)
+    const phaseMeta = resolveThinkingPhaseMeta(phase)
+    const round = Number.isFinite(eventLike?.round) ? Math.trunc(eventLike.round) : null
+    const step = {
+      id: `agent_step_${Date.now()}_${thinkingStepSeqRef.current++}`,
+      phase,
+      label: phaseMeta.label,
+      tone: phaseMeta.tone,
+      round,
+      message: buildThinkingMessage(eventLike, phaseMeta),
+      ts: Date.now(),
+    }
+
+    setThinkingSteps((prev) => {
+      const next = [...prev, step]
+      if (next.length <= MAX_AGENT_THINKING_STEPS) return next
+      return next.slice(next.length - MAX_AGENT_THINKING_STEPS)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!supportsAgent && chatMode !== 'ask') {
+      setChatMode('ask')
+    }
+  }, [supportsAgent, chatMode])
+
+  useEffect(() => {
+    return () => {
+      resetAgentUiState()
+    }
+  }, [resetAgentUiState])
 
   const resetConversationState = useCallback(() => {
     setConversationId(null)
@@ -405,7 +796,8 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     setNextCursor(null)
     setHasMoreHistory(false)
     setStreamNotice('')
-  }, [])
+    resetThinkingTrail()
+  }, [resetThinkingTrail])
 
   const loadConversationList = useCallback(async () => {
     if (!projectId) {
@@ -422,18 +814,27 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
         pageSize: 20,
       })
       const list = Array.isArray(data?.list) ? data.list : []
-      setConversationList(list)
-      return list
+      const modeMap = getConversationModeMap(projectId, contextType)
+      const filtered = list.filter((item) => {
+        const mode = modeMap[item.id] || 'ask'
+        return mode === effectiveMode
+      })
+      setConversationList(filtered)
+      return filtered
     } catch {
       setConversationList([])
       return []
     } finally {
       setConversationListLoading(false)
     }
-  }, [projectId, contextType])
+  }, [projectId, contextType, effectiveMode])
 
   const loadConversationHistory = useCallback(async (targetConversationId, { before, limit = 30, append = false } = {}) => {
     if (!targetConversationId || !projectId) return
+
+    if (!append) {
+      resetThinkingTrail()
+    }
 
     const query = { limit }
     if (before) query.before = before
@@ -455,8 +856,9 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     setConversationTitle(conversation?.title || null)
     setNextCursor(cursor || null)
     setHasMoreHistory(!!hasMore)
-    saveConversationId(projectId, contextType, targetConversationId)
-  }, [projectId, contextType])
+    saveConversationId(projectId, contextType, targetConversationId, effectiveMode)
+    setConversationMode(projectId, contextType, targetConversationId, effectiveMode)
+  }, [projectId, contextType, effectiveMode, resetThinkingTrail])
 
   useImperativeHandle(ref, () => ({ open: () => setIsOpen(true) }))
 
@@ -479,7 +881,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
       await loadConversationList()
       if (disposed) return
 
-      const storedId = getSavedConversationId(projectId, contextType)
+      const storedId = getSavedConversationId(projectId, contextType, effectiveMode)
       if (!storedId) {
         resetConversationState()
         return
@@ -490,7 +892,8 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
         await loadConversationHistory(storedId, { limit: 30 })
       } catch (err) {
         if (err?.status === 404 || err?.code === 40400 || err?.status === 403 || err?.code === 40300) {
-          clearConversationId(projectId, contextType)
+          clearConversationId(projectId, contextType, effectiveMode)
+          removeConversationMode(projectId, contextType, storedId)
           resetConversationState()
         }
       } finally {
@@ -502,7 +905,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     return () => {
       disposed = true
     }
-  }, [isOpen, projectId, contextType, loadConversationList, loadConversationHistory, resetConversationState])
+  }, [isOpen, projectId, contextType, effectiveMode, loadConversationList, loadConversationHistory, resetConversationState])
 
   // ── 自动滚动到底部（加载历史时跳过）────────────────────────
   useEffect(() => {
@@ -562,11 +965,12 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     abortCtrlRef.current?.abort()
     setLoading(false)
     setIsTyping(false)
-    if (projectId) clearConversationId(projectId, contextType)
+    if (projectId) clearConversationId(projectId, contextType, effectiveMode)
+    resetAgentUiState()
     resetConversationState()
     setInputVal('')
     autoExpandedRef.current = false
-  }, [projectId, contextType, resetConversationState])
+  }, [projectId, contextType, effectiveMode, resetConversationState, resetAgentUiState])
 
   // ── 切换会话 ────────────────────────────────────────────────
   const handleSelectConversation = useCallback(async (targetConversationId) => {
@@ -580,7 +984,8 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     } catch (err) {
       if (err?.status === 404 || err?.code === 40400) {
         message.warning('会话不存在，已从列表移除')
-        if (projectId) clearConversationId(projectId, contextType)
+        if (projectId) clearConversationId(projectId, contextType, effectiveMode)
+        removeConversationMode(projectId, contextType, targetConversationId)
         resetConversationState()
         await loadConversationList()
       } else {
@@ -589,7 +994,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     } finally {
       setHistoryLoading(false)
     }
-  }, [loading, historyLoading, loadConversationHistory, projectId, contextType, resetConversationState, loadConversationList])
+  }, [loading, historyLoading, loadConversationHistory, projectId, contextType, effectiveMode, resetConversationState, loadConversationList])
 
   // ── 删除会话 ────────────────────────────────────────────────
   const handleDeleteConversation = useCallback((targetConversationId) => {
@@ -607,10 +1012,11 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
           await deleteConversation(targetConversationId)
 
           if (projectId) {
-            const storedId = getSavedConversationId(projectId, contextType)
+            const storedId = getSavedConversationId(projectId, contextType, effectiveMode)
             if (storedId === targetConversationId) {
-              clearConversationId(projectId, contextType)
+              clearConversationId(projectId, contextType, effectiveMode)
             }
+            removeConversationMode(projectId, contextType, targetConversationId)
           }
 
           if (conversationId === targetConversationId) {
@@ -626,7 +1032,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
         }
       },
     })
-  }, [deletingConversation, loading, projectId, contextType, conversationId, resetConversationState, loadConversationList])
+  }, [deletingConversation, loading, projectId, contextType, effectiveMode, conversationId, resetConversationState, loadConversationList])
 
   // ── 加载更多历史 ─────────────────────────────────────────────
   const handleLoadMore = useCallback(async () => {
@@ -646,9 +1052,16 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
   }, [conversationId, nextCursor, historyLoading, loadConversationHistory])
 
   // ── 中断回答 ────────────────────────────────────────────────
-  const handleStop = useCallback(() => {
+  const handleStop = useCallback(async () => {
     abortCtrlRef.current?.abort()
-  }, [])
+    if (supportsAgent && effectiveMode === 'agent' && activeSessionId) {
+      try {
+        await cancelAgentSession(activeSessionId)
+      } catch {
+        // best effort cancellation
+      }
+    }
+  }, [supportsAgent, effectiveMode, activeSessionId])
 
   // ── 发送消息 ────────────────────────────────────────────────
   const handleSend = useCallback(async (text) => {
@@ -681,9 +1094,12 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
         const conv = await createConversation(projectId, contextType)
         convId = conv?.id
         if (!convId) throw new Error('创建对话失败，请重试')
-        saveConversationId(projectId, contextType, convId)
+        saveConversationId(projectId, contextType, convId, 'ask')
+        setConversationMode(projectId, contextType, convId, 'ask')
         setConversationId(convId)
         setConversationTitle(conv?.title || null)
+      } else {
+        setConversationMode(projectId, contextType, convId, 'ask')
       }
 
       // Step 2: 流式发送消息
@@ -806,12 +1222,590 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     loadConversationList,
   ])
 
+  const recoverAgentPendingFromStatus = useCallback((statusPayload) => {
+    const session = statusPayload?.session
+    if (!session || typeof session !== 'object') return
+
+    const sessionId = session.sessionId || session.id || null
+    if (sessionId) setActiveSession(sessionId)
+
+    const state = typeof (session.state || session.status) === 'string'
+      ? (session.state || session.status).toLowerCase()
+      : ''
+    const callId = session.pendingCallId || session.pending_call_id
+    const tool = session.pendingTool || session.pending_tool || ''
+    const args = session.pendingArgs || session.pending_args || {}
+    const preview = session.previewPatch || session.preview_patch || null
+    const iteration = session.pendingIteration || session.pending_iteration || null
+    const suggestedContinueRounds = Number.isFinite(session?.suggestedContinueRounds)
+      ? session.suggestedContinueRounds
+      : Number.isFinite(session?.suggested_continue_rounds)
+        ? session.suggested_continue_rounds
+        : Number.isFinite(iteration?.suggestedContinueRounds)
+          ? iteration.suggestedContinueRounds
+          : Number.isFinite(iteration?.suggested_continue_rounds)
+            ? iteration.suggested_continue_rounds
+            : 1
+
+    if (state === 'paused_confirm' && callId) {
+      setPendingConfirm({ callId, tool, args })
+      setAgentState('paused_confirm')
+      appendThinkingStep({
+        phase: 'context_refresh',
+        message: `已恢复会话，等待确认危险操作：${tool || 'unknown_tool'}。`,
+      })
+      return
+    }
+
+    if (state === 'paused_preview' && callId) {
+      setPendingPreview({ callId, tool, preview })
+      setAgentState('paused_preview')
+      appendThinkingStep({
+        phase: 'context_refresh',
+        message: `已恢复会话，等待确认预览变更：${tool || 'hybrid_tool'}。`,
+      })
+      return
+    }
+
+    if (state === 'paused_iteration') {
+      const iterationCallId = callId || iteration?.callId || iteration?.call_id
+      if (iterationCallId) {
+        setPendingIteration({
+          callId: iterationCallId,
+          round: session?.round ?? session?.currentRound ?? iteration?.round,
+          maxRounds: session?.maxRounds ?? session?.max_rounds ?? iteration?.maxRounds ?? iteration?.max_rounds,
+          suggestedContinueRounds,
+        })
+        setContinueRounds(Math.min(20, Math.max(1, Number(suggestedContinueRounds) || 1)))
+        setAgentState('paused_iteration')
+        appendThinkingStep({
+          phase: 'context_refresh',
+          round: session?.round ?? session?.currentRound ?? iteration?.round,
+          message: '已恢复会话，等待继续迭代确认。',
+        })
+        return
+      }
+    }
+
+    if (state === 'running') {
+      setAgentState('running')
+      appendThinkingStep({
+        phase: 'context_refresh',
+        message: '已恢复会话，Agent 正在继续执行。',
+      })
+      return
+    }
+
+    if (state === 'done') {
+      setAgentState('done')
+      appendThinkingStep({
+        phase: 'finalizing',
+        message: '会话已完成，可继续发起新任务。',
+      })
+      return
+    }
+
+    if (state === 'cancelled') {
+      setAgentState('cancelled')
+      setStreamNotice('Agent 会话已取消。')
+      appendThinkingStep({
+        phase: 'round_stopped',
+        message: '会话已取消。',
+      })
+      return
+    }
+
+    setAgentState('idle')
+  }, [
+    appendThinkingStep,
+    setActiveSession,
+    setAgentState,
+    setPendingConfirm,
+    setPendingPreview,
+    setPendingIteration,
+  ])
+
+  const handleAgentSend = useCallback(async (text) => {
+    const msg = (text ?? inputVal).trim()
+    if (!msg || loading || !projectId) return
+    if (msg.length > 2000) {
+      message.warning('消息长度不能超过 2000 字符')
+      return
+    }
+
+    const userMsgId = Date.now()
+    const aiMsgId = userMsgId + 1
+    let convId = conversationId
+
+    setInputVal('')
+    setStreamNotice('')
+    resetThinkingTrail()
+    setMessages(prev => [...prev, { id: userMsgId, role: 'user', content: msg, isPartial: false }])
+
+    const controller = new AbortController()
+    abortCtrlRef.current = controller
+    setLoading(true)
+    setIsTyping(true)
+    resetAgentUiState()
+    setAgentState('running')
+    let aiMsgAdded = false
+    let doneMeta = null
+
+    try {
+      if (!convId) {
+        const conv = await createConversation(projectId, contextType)
+        convId = conv?.id
+        if (!convId) throw new Error('创建 Agent 会话失败，请重试')
+        saveConversationId(projectId, contextType, convId, 'agent')
+        setConversationMode(projectId, contextType, convId, 'agent')
+        setConversationId(convId)
+        setConversationTitle(conv?.title || null)
+      } else {
+        setConversationMode(projectId, contextType, convId, 'agent')
+      }
+
+      const agentRequestPayload = buildAgentRequestPayload(contextType)
+      if (agentRequestPayload.readOnly !== true && !Number.isFinite(agentRequestPayload.clientRevision)) {
+        throw new Error('当前图版本尚未同步，请稍后重试。')
+      }
+
+      await sendAgentStream(convId, msg, selectedModel, {
+        ...agentRequestPayload,
+        signal: controller.signal,
+        onStarted: (event) => {
+          streamStateRef.current.startedAt = Date.now()
+          setActiveSession(event?.sessionId || null)
+          setAgentState('running')
+          setIsTyping(true)
+          appendThinkingStep({
+            phase: 'context_loaded',
+            message: '已建立 Agent 会话，正在分析你的请求与图上下文。',
+          })
+        },
+        onHeartbeat: () => {
+          streamStateRef.current.lastHeartbeatAt = Date.now()
+        },
+        onThinking: (event) => {
+          appendThinkingStep(event)
+        },
+        onChunk: (chunk) => {
+          if (!chunk) return
+          setIsTyping(false)
+
+          if (!autoExpandedRef.current) {
+            autoExpandedRef.current = true
+            const vh = window.innerHeight
+            const currentH = panelSizeRef.current.height
+            if (currentH < vh * PANEL_EXPAND_THRESH) {
+              const targetH = Math.min(
+                Math.round(vh * PANEL_EXPAND_RATIO),
+                vh - TOP_NAV_H - EDGE_PAD * 2,
+              )
+              setIsAutoExpanding(true)
+              setPanelSize(prev => ({ ...prev, height: Math.max(targetH, PANEL_MIN_H) }))
+              setTimeout(() => setIsAutoExpanding(false), 520)
+            }
+          }
+
+          if (!aiMsgAdded) {
+            aiMsgAdded = true
+            setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: chunk, isPartial: false }])
+          } else {
+            setMessages(prev => prev.map(item =>
+              item.id === aiMsgId ? { ...item, content: item.content + chunk } : item
+            ))
+          }
+        },
+        onClientTool: (event) => {
+          executeClientTool(event.tool, event.args || {})
+        },
+        onToolCallStart: (event) => {
+          const affected = Array.isArray(event?.affectedNodes) ? event.affectedNodes : []
+          if (affected.length) {
+            useAgentUIStore.getState().setHighlight(affected, 'agent-primary')
+          }
+          appendThinkingStep({
+            phase: 'tool_execution',
+            message: `开始执行工具 ${event?.tool || 'unknown_tool'}`,
+          })
+        },
+        onToolCallResult: (event) => {
+          const schemaVersion = Number.isFinite(event?.schemaVersion) ? Math.trunc(event.schemaVersion) : 1
+          if (schemaVersion !== 1) {
+            setStreamNotice(`收到暂不支持的工具结果版本 v${schemaVersion}，已忽略该事件。`)
+            return
+          }
+
+          const resultStatus = normalizeToolResultStatus(event)
+          const statusLabel = getToolResultStatusLabel(resultStatus)
+          useAgentUIStore.getState().clearHighlight()
+
+          if (resultStatus === 'success' && event?.patch && contextType === 'faultTree') {
+            editorStore.getState().applyGraphPatch?.(event.patch)
+          }
+
+          if (resultStatus === 'failed' && event?.error) {
+            setStreamNotice(`工具调用失败：${event.error}`)
+          }
+
+          const phaseByStatus = {
+            success: 'round_summary',
+            failed: 'model_error',
+            cancelled: 'round_stopped',
+            discarded: 'round_stopped',
+            client_only: 'tool_execution',
+          }
+          appendThinkingStep({
+            phase: phaseByStatus[resultStatus] || 'round_summary',
+            message: `${event?.tool || 'tool'} ${statusLabel}${event?.summary ? `：${event.summary}` : ''}`,
+          })
+
+          if (event?.summary && aiMsgAdded) {
+            setMessages(prev => prev.map(item =>
+              item.id === aiMsgId
+                ? { ...item, content: `${item.content}\n\n- [${statusLabel}] ${event.summary}` }
+                : item
+            ))
+          }
+        },
+        onToolCallError: (event) => {
+          useAgentUIStore.getState().clearHighlight()
+          appendThinkingStep({
+            phase: 'model_error',
+            message: `工具 ${event?.tool || 'unknown_tool'} 执行失败${event?.error ? `：${event.error}` : ''}`,
+          })
+          if (event?.error) {
+            setStreamNotice(`工具调用失败：${event.error}`)
+          }
+        },
+        onToolCallCancelled: (event) => {
+          useAgentUIStore.getState().clearHighlight()
+          appendThinkingStep({
+            phase: 'round_stopped',
+            message: `工具 ${event?.tool || 'unknown_tool'} 已取消。`,
+          })
+        },
+        onConfirmRequired: (event) => {
+          setPendingConfirm(event)
+          setAgentState('paused_confirm')
+          appendThinkingStep({
+            phase: 'round_limit_reached',
+            message: `等待你确认危险操作：${event?.tool || 'unknown_tool'}`,
+          })
+          const affected = Array.isArray(event?.affectedNodes) ? event.affectedNodes : []
+          if (affected.length) {
+            useAgentUIStore.getState().setHighlight(affected, 'agent-warning')
+          }
+        },
+        onPreviewReady: (event) => {
+          const wrapped = {
+            callId: event?.callId,
+            tool: event?.tool,
+            preview: event?.preview || null,
+          }
+          setPendingPreview(wrapped)
+          setAgentState('paused_preview')
+          appendThinkingStep({
+            phase: 'tool_plan',
+            message: `已生成预览方案，等待你确认提交（${event?.tool || 'hybrid_tool'}）。`,
+          })
+        },
+        onPreviewDiscarded: () => {
+          clearPendingPreview()
+          setAgentState('running')
+          appendThinkingStep({
+            phase: 'round_stopped',
+            message: '已放弃当前预览方案，继续后续流程。',
+          })
+        },
+        onIterationLimitReached: (event) => {
+          setPendingIteration(event)
+          setContinueRounds(Number.isFinite(event?.suggestedContinueRounds) ? event.suggestedContinueRounds : 1)
+          setAgentState('paused_iteration')
+          appendThinkingStep({
+            phase: 'round_limit_reached',
+            round: event?.round,
+            message: `达到最大轮次 ${event?.maxRounds || '-'}，等待继续迭代确认。`,
+          })
+        },
+        onIterationResumed: (event) => {
+          clearPendingIteration()
+          setAgentState('running')
+          appendThinkingStep({
+            phase: 'round_resumed',
+            round: event?.round,
+            message: `继续迭代 ${event?.continueRounds || 1} 轮，新的上限 ${event?.newMaxRounds || '-'}`,
+          })
+        },
+        onIterationStopped: (event) => {
+          clearPendingIteration()
+          setAgentState('running')
+          appendThinkingStep({
+            phase: 'round_stopped',
+            round: event?.round,
+            message: `已停止继续迭代（当前上限 ${event?.maxRounds || '-'}）。`,
+          })
+        },
+        onDone: (event) => {
+          doneMeta = event
+          useAgentUIStore.getState().clearHighlight()
+          useAgentUIStore.getState().clearLayoutPreview()
+          useAgentUIStore.getState().clearAllAnnotations()
+          if (event?.errorCode) {
+            setStreamNotice(resolveAgentErrorMessage(event, `Agent 已结束，错误码 ${event.errorCode}`))
+            appendThinkingStep({
+              phase: 'model_error',
+              message: resolveAgentErrorMessage(event, '执行结束，但存在错误。'),
+            })
+            return
+          }
+          appendThinkingStep({
+            phase: 'finalizing',
+            message: 'Agent 执行完成，结果已同步到画布。',
+          })
+        },
+      })
+
+      if (!conversationTitle) {
+        setConversationTitle(msg.slice(0, 30))
+      }
+
+      if (doneMeta?.errorCode && aiMsgAdded) {
+        setMessages(prev => prev.map(item =>
+          item.id === aiMsgId
+            ? { ...item, isPartial: true }
+            : item
+        ))
+      }
+
+      await loadConversationList()
+    } catch (err) {
+      const isAborted = err?.name === 'AbortError' || controller.signal.aborted
+      if (isAborted) {
+        appendThinkingStep({
+          phase: 'round_stopped',
+          message: '你已停止本次 Agent 执行。',
+        })
+        if (!aiMsgAdded) {
+          setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '（已停止执行）', isPartial: false }])
+        }
+      } else {
+        const sessionId = useAgentUIStore.getState().activeSessionId
+        if (sessionId) {
+          try {
+            const statusPayload = await getAgentSessionStatus(sessionId)
+            recoverAgentPendingFromStatus(statusPayload)
+          } catch {
+            // recovery is best effort
+          }
+        }
+
+        if (aiMsgAdded) {
+          setMessages(prev => prev.map(item =>
+            item.id === aiMsgId ? { ...item, isPartial: true } : item
+          ))
+          setStreamNotice(resolveAgentErrorMessage(err, 'Agent 流式中断，已保留部分结果。'))
+        } else {
+          setMessages(prev => [...prev, {
+            id: aiMsgId,
+            role: 'ai',
+            content: '抱歉，Agent 暂时无法响应，请稍后重试。',
+            isPartial: false,
+          }])
+          setStreamNotice(resolveAgentErrorMessage(err, 'Agent 请求失败，请稍后重试。'))
+        }
+        appendThinkingStep({
+          phase: 'model_error',
+          message: resolveAgentErrorMessage(err, 'Agent 执行失败，请稍后重试。'),
+        })
+      }
+    } finally {
+      abortCtrlRef.current = null
+      setLoading(false)
+      setIsTyping(false)
+      const uiState = useAgentUIStore.getState()
+      if (!uiState.pendingConfirm && !uiState.pendingPreview && !uiState.pendingIteration) {
+        setAgentState('idle')
+      }
+      await loadConversationList()
+    }
+  }, [
+    inputVal,
+    loading,
+    projectId,
+    contextType,
+    conversationId,
+    selectedModel,
+    conversationTitle,
+    appendThinkingStep,
+    clearPendingIteration,
+    clearPendingPreview,
+    loadConversationList,
+    recoverAgentPendingFromStatus,
+    resetThinkingTrail,
+    resetAgentUiState,
+    setActiveSession,
+    setAgentState,
+    setPendingConfirm,
+    setPendingIteration,
+    setPendingPreview,
+  ])
+
+  const handleSendByMode = useCallback((text) => {
+    if (effectiveMode === 'agent' && supportsAgent) {
+      return handleAgentSend(text)
+    }
+    return handleSend(text)
+  }, [effectiveMode, supportsAgent, handleAgentSend, handleSend])
+
+  const handleModeSwitch = useCallback((nextMode) => {
+    if (!supportsAgent || (nextMode !== 'ask' && nextMode !== 'agent')) return
+    if (nextMode === chatMode) return
+    if (loading) {
+      message.warning('请等待当前回复结束后再切换模式')
+      return
+    }
+
+    abortCtrlRef.current?.abort()
+    resetConversationState()
+    resetAgentUiState()
+    setContinueRounds(1)
+    setChatMode(nextMode)
+  }, [supportsAgent, chatMode, loading, resetConversationState, resetAgentUiState])
+
+  const handleConfirmRequired = useCallback(async (approved) => {
+    if (!activeSessionId || !pendingConfirm?.callId) return
+    try {
+      await confirmAgentAction(activeSessionId, {
+        callId: pendingConfirm.callId,
+        approved,
+      })
+      clearPendingConfirm()
+      useAgentUIStore.getState().clearHighlight()
+      setAgentState('running')
+      if (!approved) {
+        setStreamNotice('已取消本次高风险操作。')
+        appendThinkingStep({
+          phase: 'round_stopped',
+          message: `你已拒绝危险操作：${pendingConfirm.tool || 'unknown_tool'}。`,
+        })
+        return
+      }
+      appendThinkingStep({
+        phase: 'round_resumed',
+        message: `你已确认继续执行：${pendingConfirm.tool || 'unknown_tool'}。`,
+      })
+    } catch (err) {
+      message.error(err?.message || '确认操作失败')
+    }
+  }, [activeSessionId, pendingConfirm, clearPendingConfirm, setAgentState, appendThinkingStep])
+
+  const handlePreviewApply = useCallback(async (eventCallId, checkedIds = []) => {
+    const callId = eventCallId || pendingPreview?.callId
+    const approvedOps = Array.isArray(checkedIds)
+      ? checkedIds.filter((id) => typeof id === 'string' && id.trim())
+      : []
+
+    if (!activeSessionId || !callId) return
+    if (!approvedOps.length) {
+      message.warning('请至少选择一项预览变更')
+      return
+    }
+    try {
+      await confirmAgentAction(activeSessionId, {
+        callId,
+        approved: true,
+        approvedOps,
+      })
+      clearPendingPreview()
+      setAgentState('running')
+      appendThinkingStep({
+        phase: 'round_resumed',
+        message: `已应用 ${approvedOps.length} 项预览变更，继续执行。`,
+      })
+    } catch (err) {
+      message.error(err?.message || '提交预览确认失败')
+    }
+  }, [activeSessionId, pendingPreview, clearPendingPreview, setAgentState, appendThinkingStep])
+
+  const handlePreviewDiscard = useCallback(async (eventCallId) => {
+    const callId = eventCallId || pendingPreview?.callId
+    if (!activeSessionId || !callId) return
+    try {
+      await confirmAgentAction(activeSessionId, {
+        callId,
+        approved: false,
+      })
+      clearPendingPreview()
+      setAgentState('running')
+      appendThinkingStep({
+        phase: 'round_stopped',
+        message: '已放弃本次预览提交，Agent 将继续其他步骤。',
+      })
+    } catch (err) {
+      message.error(err?.message || '放弃预览失败')
+    }
+  }, [activeSessionId, pendingPreview, clearPendingPreview, setAgentState, appendThinkingStep])
+
+  useEffect(() => {
+    if (!supportsAgent) return
+
+    const onApply = (event) => {
+      const callId = event?.detail?.callId
+      const checkedIds = event?.detail?.checkedIds
+      handlePreviewApply(callId, checkedIds)
+    }
+
+    const onDiscard = (event) => {
+      const callId = event?.detail?.callId
+      handlePreviewDiscard(callId)
+    }
+
+    window.addEventListener('agent:hybrid-preview-apply', onApply)
+    window.addEventListener('agent:hybrid-preview-discard', onDiscard)
+
+    return () => {
+      window.removeEventListener('agent:hybrid-preview-apply', onApply)
+      window.removeEventListener('agent:hybrid-preview-discard', onDiscard)
+    }
+  }, [supportsAgent, handlePreviewApply, handlePreviewDiscard])
+
+  const handleIterationDecision = useCallback(async (approved) => {
+    if (!activeSessionId || !pendingIteration?.callId) return
+    try {
+      await confirmAgentAction(activeSessionId, {
+        callId: pendingIteration.callId,
+        approved,
+        continueRounds: approved ? Math.min(20, Math.max(1, Number(continueRounds) || 1)) : undefined,
+      })
+      clearPendingIteration()
+      setAgentState('running')
+      if (!approved) {
+        setStreamNotice('已停止继续迭代。')
+        appendThinkingStep({
+          phase: 'round_stopped',
+          message: '你已选择停止继续迭代。',
+        })
+        return
+      }
+      appendThinkingStep({
+        phase: 'round_resumed',
+        message: `你已同意继续 ${Math.min(20, Math.max(1, Number(continueRounds) || 1))} 轮迭代。`,
+      })
+    } catch (err) {
+      message.error(err?.message || '提交迭代确认失败')
+    }
+  }, [activeSessionId, pendingIteration, continueRounds, clearPendingIteration, setAgentState, appendThinkingStep])
+
   const handleClear = useCallback(() => {
     setMessages([])
     setNextCursor(null)
     setHasMoreHistory(false)
     setStreamNotice('')
-  }, [])
+    setContinueRounds(1)
+    resetThinkingTrail()
+    resetAgentUiState()
+  }, [resetAgentUiState, resetThinkingTrail])
 
   // ── 按钮拖拽 ─────────────────────────────────────────────────
   const onBtnMouseMove = useCallback((e) => {
@@ -940,7 +1934,24 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
           font-size: 11px;
         }
         .ai-model-sel .ant-select-arrow { color: #aab0c0; }
-        
+        .agent-thinking-scroll::-webkit-scrollbar { width: 6px; }
+        .agent-thinking-scroll::-webkit-scrollbar-thumb {
+          background: rgba(148,163,184,0.45);
+          border-radius: 999px;
+        }
+        .agent-thinking-live-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #13a8a8;
+          box-shadow: 0 0 0 0 rgba(19,168,168,0.45);
+          animation: agent-thinking-pulse 1.35s ease-out infinite;
+        }
+        @keyframes agent-thinking-pulse {
+          0% { box-shadow: 0 0 0 0 rgba(19,168,168,0.45); }
+          70% { box-shadow: 0 0 0 7px rgba(19,168,168,0); }
+          100% { box-shadow: 0 0 0 0 rgba(19,168,168,0); }
+        }
       `}</style>
 
       {/* ── 对话面板 ─────────────────────────────────────────────── */}
@@ -976,6 +1987,49 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               <div style={{ color: '#fff', fontWeight: 700, fontSize: 15.5, lineHeight: 1.2, letterSpacing: 0.2 }}>
                 {CONTEXT_LABELS[contextType] ?? 'AI 助手'}
               </div>
+              {supportsAgent && (
+                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ display: 'inline-flex', borderRadius: 999, background: 'rgba(255,255,255,0.18)', padding: 2 }}>
+                    <button
+                      type="button"
+                      onClick={() => handleModeSwitch('ask')}
+                      style={{
+                        border: 'none',
+                        borderRadius: 999,
+                        padding: '2px 9px',
+                        fontSize: 11,
+                        color: '#fff',
+                        background: effectiveMode === 'ask' ? 'rgba(255,255,255,0.34)' : 'transparent',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                      }}
+                      disabled={loading}
+                    >
+                      Ask
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleModeSwitch('agent')}
+                      style={{
+                        border: 'none',
+                        borderRadius: 999,
+                        padding: '2px 9px',
+                        fontSize: 11,
+                        color: '#fff',
+                        background: effectiveMode === 'agent' ? 'rgba(255,255,255,0.34)' : 'transparent',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                      }}
+                      disabled={loading}
+                    >
+                      Agent
+                    </button>
+                  </div>
+                  {effectiveMode === 'agent' && (
+                    <Tag style={{ marginInlineEnd: 0, border: 'none', background: 'rgba(255,255,255,0.24)', color: '#fff', fontSize: 10 }}>
+                      {AGENT_STATE_LABELS[agentState] || agentState}
+                    </Tag>
+                  )}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
               <Tooltip title="新建对话">
@@ -1063,6 +2117,15 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               }}>
                 {streamNotice}
               </div>
+            )}
+
+            {effectiveMode === 'agent' && (
+              <AgentThinkingPanel
+                steps={thinkingSteps}
+                expanded={thinkingExpanded}
+                running={loading || agentState === 'running'}
+                onToggleExpand={() => setThinkingExpanded((prev) => !prev)}
+              />
             )}
 
             {/* 加载更多历史 */}
@@ -1159,7 +2222,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 {quickQuestions.map(q => (
                   <button
                     key={q.id}
-                    onClick={() => !loading && !deletingConversation && handleSend(q.question)}
+                    onClick={() => !loading && !deletingConversation && handleSendByMode(q.question)}
                     disabled={loading || deletingConversation}
                     className="ai-quick-btn"
                     style={{
@@ -1205,10 +2268,10 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 onPressEnter={e => {
                   if (!e.shiftKey) {
                     e.preventDefault()
-                    if (!loading && !deletingConversation) handleSend()
+                    if (!loading && !deletingConversation) handleSendByMode()
                   }
                 }}
-                placeholder="向 AI 助手提问..."
+                placeholder={effectiveMode === 'agent' ? '描述你希望 Agent 执行的编辑任务...' : '向 AI 助手提问...'}
                 autoSize={{ minRows: 1, maxRows: 5 }}
                 disabled={loading || deletingConversation}
                 style={{
@@ -1260,7 +2323,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                   </button>
                 ) : (
                   <button
-                    onClick={() => handleSend()}
+                    onClick={() => handleSendByMode()}
                     disabled={!inputVal.trim() || deletingConversation}
                     style={{
                       width: 30, height: 30, borderRadius: '50%',
@@ -1283,6 +2346,65 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               </div>
             </div>
           </div>
+
+          {effectiveMode === 'agent' && pendingConfirm && (
+            <Modal
+              open
+              title={<span style={{ color: '#ff4d4f' }}>确认执行高风险操作</span>}
+              okText="确认执行"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onOk={() => handleConfirmRequired(true)}
+              onCancel={() => handleConfirmRequired(false)}
+              destroyOnClose
+            >
+              <Alert
+                type="warning"
+                showIcon
+                message={pendingConfirm.warning || '该操作可能影响现有结构，请确认后继续。'}
+                style={{ marginBottom: 12 }}
+              />
+              <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
+                工具：{pendingConfirm.tool || '-'}
+              </div>
+              {Array.isArray(pendingConfirm.affectedNodes) && pendingConfirm.affectedNodes.length > 0 && (
+                <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                  {pendingConfirm.affectedNodes.map((nodeId) => (
+                    <Tag key={nodeId} style={{ marginBottom: 6 }}>{nodeId}</Tag>
+                  ))}
+                </div>
+              )}
+            </Modal>
+          )}
+
+          {effectiveMode === 'agent' && pendingIteration && (
+            <Modal
+              open
+              title="达到最大迭代轮次"
+              okText="继续迭代"
+              cancelText="停止"
+              onOk={() => handleIterationDecision(true)}
+              onCancel={() => handleIterationDecision(false)}
+              destroyOnClose
+            >
+              <div style={{ marginBottom: 10, fontSize: 13, color: '#4b5563', lineHeight: 1.6 }}>
+                当前轮次 {pendingIteration.round || '-'} / 上限 {pendingIteration.maxRounds || '-'}。
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 13, color: '#374151' }}>继续轮数</span>
+                <InputNumber
+                  min={1}
+                  max={20}
+                  value={continueRounds}
+                  onChange={(value) => {
+                    if (!Number.isFinite(value)) return
+                    setContinueRounds(value)
+                  }}
+                />
+                <span style={{ fontSize: 12, color: '#9ca3af' }}>建议范围 1 - 20</span>
+              </div>
+            </Modal>
+          )}
 
           {/* ── 缩放把手 ─────────────────────────────────────── */}
           <div onMouseDown={startResize('right')}
