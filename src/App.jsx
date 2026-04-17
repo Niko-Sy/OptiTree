@@ -21,7 +21,7 @@ const Help = lazy(() => import('./pages/Help'))
 function PageLoading() {
   return (
     <div className="h-screen flex items-center justify-center bg-gray-50">
-      <Spin size="large" tip="加载中..." />
+      <Spin size="large" description="加载中..." />
     </div>
   )
 }

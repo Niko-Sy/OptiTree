@@ -12,6 +12,184 @@ const TEXT_EXTENSIONS = new Set([
   'json', 'xml', 'yaml', 'yml', 'ini', 'conf', 'properties', 'sql',
 ])
 
+const SEARCH_SNIPPET_ALLOWED_SYMBOLS = /[\s.,;:!?，。！？；：“”‘’、【】（）《》【】·…—_\-+/\\|@#$%^&*~`'=]+/
+
+function collectSnippetMetrics(value = '') {
+  const source = String(value || '')
+  let readableCount = 0
+  let tokenCount = 0
+  let weirdCount = 0
+  let latin1Count = 0
+  let cjkCount = 0
+
+  for (const char of source) {
+    const code = char.charCodeAt(0)
+    if (/[0-9a-zA-Z]/.test(char)) {
+      readableCount += 1
+      tokenCount += 1
+      continue
+    }
+    if (/[\u4e00-\u9fa5]/.test(char)) {
+      readableCount += 1
+      tokenCount += 1
+      cjkCount += 1
+      continue
+    }
+    if (SEARCH_SNIPPET_ALLOWED_SYMBOLS.test(char)) {
+      readableCount += 1
+      continue
+    }
+
+    if (code >= 161 && code <= 255) {
+      latin1Count += 1
+    }
+    weirdCount += 1
+  }
+
+  const total = source.length || 1
+  return {
+    readableRatio: readableCount / total,
+    tokenRatio: tokenCount / total,
+    weirdRatio: weirdCount / total,
+    latin1Ratio: latin1Count / total,
+    cjkRatio: cjkCount / total,
+  }
+}
+
+function containsKeyword(source = '', keyword = '') {
+  const normalizedKeyword = String(keyword || '').trim().toLowerCase()
+  if (normalizedKeyword.length < 2) return true
+  return String(source || '').toLowerCase().includes(normalizedKeyword)
+}
+
+function tryDecodeLatin1AsUtf8(input = '') {
+  const source = String(input || '')
+  if (!source) return ''
+
+  try {
+    const bytes = Uint8Array.from(Array.from(source), (char) => char.charCodeAt(0) & 0xff)
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  } catch {
+    return ''
+  }
+}
+
+function chooseBestSnippetCandidate(cleanedSnippet = '', keyword = '') {
+  if (!cleanedSnippet) return cleanedSnippet
+
+  const decodedCandidate = normalizeSearchSnippetText(tryDecodeLatin1AsUtf8(cleanedSnippet))
+  if (!decodedCandidate || decodedCandidate === cleanedSnippet) {
+    return cleanedSnippet
+  }
+
+  const cleanedMetrics = collectSnippetMetrics(cleanedSnippet)
+  const decodedMetrics = collectSnippetMetrics(decodedCandidate)
+
+  const cleanedScore = cleanedMetrics.readableRatio - cleanedMetrics.weirdRatio - cleanedMetrics.latin1Ratio * 0.5
+  const decodedScore = decodedMetrics.readableRatio - decodedMetrics.weirdRatio - decodedMetrics.latin1Ratio * 0.5
+
+  const cleanedKeywordHit = containsKeyword(cleanedSnippet, keyword)
+  const decodedKeywordHit = containsKeyword(decodedCandidate, keyword)
+
+  if (decodedKeywordHit && !cleanedKeywordHit) {
+    return decodedCandidate
+  }
+
+  if (decodedScore > cleanedScore + 0.08) {
+    return decodedCandidate
+  }
+
+  return cleanedSnippet
+}
+
+function normalizeSearchSnippetText(value = '') {
+  const stripped = Array.from(String(value || ''))
+    .map((char) => {
+      const code = char.charCodeAt(0)
+      const isBasicControl = code <= 31 && code !== 9 && code !== 10 && code !== 13
+      const isC1Control = code >= 127 && code <= 159
+      return isBasicControl || isC1Control ? ' ' : char
+    })
+    .join('')
+
+  return stripped
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isLikelyGarbledSnippet(value = '') {
+  const source = String(value || '')
+  if (!source) return true
+
+  // C1 控制区字符通常来自二进制/编码错位。
+  if (/[\u0080-\u009f]/.test(source)) return true
+
+  const metrics = collectSnippetMetrics(source)
+  return (
+    metrics.weirdRatio > 0.28
+    || metrics.readableRatio < 0.58
+    || metrics.tokenRatio < 0.18
+    || (metrics.latin1Ratio > 0.12 && metrics.cjkRatio < 0.02)
+  )
+}
+
+function formatLocatorHint(locator = {}) {
+  if (locator?.type === 'pdf' && Number.isFinite(Number(locator.page))) {
+    return `第 ${Number(locator.page)} 页`
+  }
+
+  if (locator?.type === 'tabular') {
+    const sheet = String(locator.sheetName || '').trim()
+    const row = Number.isFinite(Number(locator.rowIndex)) ? Number(locator.rowIndex) + 1 : null
+    const col = Number.isFinite(Number(locator.colIndex)) ? Number(locator.colIndex) + 1 : null
+
+    if (sheet && row != null && col != null) return `${sheet} / 第 ${row} 行第 ${col} 列`
+    if (sheet) return sheet
+  }
+
+  if (locator?.type === 'text' && Number.isFinite(Number(locator.startOffset))) {
+    return `文本偏移 ${Number(locator.startOffset)}`
+  }
+
+  return ''
+}
+
+function buildSearchSnippetFallback(keyword = '', locator = {}) {
+  const safeKeyword = String(keyword || '').trim()
+  const locatorHint = formatLocatorHint(locator)
+
+  if (safeKeyword && locatorHint) {
+    return `关键词“${safeKeyword}”命中（${locatorHint}），点击后定位查看上下文`
+  }
+  if (safeKeyword) {
+    return `关键词“${safeKeyword}”命中，点击后定位查看上下文`
+  }
+  if (locatorHint) {
+    return `命中结果已定位（${locatorHint}），点击后查看上下文`
+  }
+  return '命中结果已定位，点击后查看上下文'
+}
+
+function normalizeSearchSnippet(rawSnippet = '', keyword = '', locator = {}) {
+  const cleaned = normalizeSearchSnippetText(rawSnippet)
+  if (!cleaned) {
+    return buildSearchSnippetFallback(keyword, locator)
+  }
+
+  const candidate = chooseBestSnippetCandidate(cleaned, keyword)
+
+  if (isLikelyGarbledSnippet(candidate)) {
+    return buildSearchSnippetFallback(keyword, locator)
+  }
+
+  if (!containsKeyword(candidate, keyword) && isLikelyGarbledSnippet(cleaned)) {
+    return buildSearchSnippetFallback(keyword, locator)
+  }
+
+  return candidate
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -121,6 +299,32 @@ function normalizeLocator(result = {}) {
   }
 }
 
+function toLocatorNumberToken(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? String(numeric) : ''
+}
+
+export function buildSearchResultKey(result = {}) {
+  const docId = String(result.docId || result.documentId || result.document?.id || '')
+  const locator = result.locator || {}
+  const type = String(locator.type || result.readerKind || '').trim().toLowerCase()
+  const keyword = String(result.keyword || result.q || locator.keyword || '').trim().toLowerCase()
+  const sheetName = String(locator.sheetName || '').trim().toLowerCase()
+
+  return [
+    docId,
+    type,
+    sheetName,
+    toLocatorNumberToken(locator.page),
+    toLocatorNumberToken(locator.rowIndex),
+    toLocatorNumberToken(locator.colIndex),
+    toLocatorNumberToken(locator.blockIndex),
+    toLocatorNumberToken(locator.startOffset),
+    toLocatorNumberToken(locator.matchIndex),
+    keyword,
+  ].join('::')
+}
+
 export function normalizeSearchResult(result = {}) {
   const document = normalizeDocumentMeta({
     ...(result.document || {}),
@@ -133,16 +337,27 @@ export function normalizeSearchResult(result = {}) {
     derivedPdfDocId: result.derivedPdfDocId || result.document?.derivedPdfDocId,
   })
 
-  return {
+  const locator = normalizeLocator(result)
+  const keyword = result.keyword || result.q || locatorKeyword(locator)
+  const rawSnippet = result.snippet || result.excerpt || result.matchText || ''
+  const normalizedSnippet = normalizeSearchSnippet(rawSnippet, keyword, locator)
+
+  const normalizedResult = {
     ...result,
     id: result.id || `${document.id}-${result.page || result.rowIndex || result.blockIndex || 0}-${result.startOffset || 0}`,
     document,
     docId: document.id,
     docName: document.name,
     readerKind: document.readerKind,
-    snippet: result.snippet || result.excerpt || result.matchText || '',
-    keyword: result.keyword || result.q || locatorKeyword(normalizeLocator(result)),
-    locator: normalizeLocator(result),
+    rawSnippet,
+    snippet: normalizedSnippet,
+    keyword,
+    locator,
+  }
+
+  return {
+    ...normalizedResult,
+    resultKey: buildSearchResultKey(normalizedResult),
   }
 }
 

@@ -32,7 +32,12 @@ function DocumentStatusFallback({ status }) {
 }
 
 export default function DocumentViewerRouter(props) {
-  const { documentMeta, activeLocator } = props
+  const {
+    documentMeta,
+    activeLocator,
+    onResolveActiveSnippet,
+    ...readerProps
+  } = props
 
   if (!documentMeta) {
     return (
@@ -49,9 +54,35 @@ export default function DocumentViewerRouter(props) {
     return <DocumentStatusFallback status={documentMeta.previewStatus} />
   }
 
-  if (documentMeta.readerKind === 'pdf') return <PdfReader {...props} />
-  if (documentMeta.readerKind === 'tabular') return <TabularReader {...props} />
-  if (documentMeta.readerKind === 'text') return <TextReader {...props} />
+  if (documentMeta.readerKind === 'pdf') {
+    return (
+      <PdfReader
+        {...readerProps}
+        documentMeta={documentMeta}
+        onActiveSnippetChange={onResolveActiveSnippet}
+      />
+    )
+  }
+
+  if (documentMeta.readerKind === 'tabular') {
+    return (
+      <TabularReader
+        {...readerProps}
+        documentMeta={documentMeta}
+        onActiveSnippetChange={onResolveActiveSnippet}
+      />
+    )
+  }
+
+  if (documentMeta.readerKind === 'text') {
+    return (
+      <TextReader
+        {...readerProps}
+        documentMeta={documentMeta}
+        onActiveSnippetChange={onResolveActiveSnippet}
+      />
+    )
+  }
 
   return (
     <div className="flex h-full items-center justify-center">

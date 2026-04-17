@@ -191,7 +191,7 @@ export default function KnowledgeGraphEditor() {
   if (!accessReady) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50">
-        <Spin tip="加载项目中..." />
+        <Spin description="加载项目中..." />
       </div>
     )
   }

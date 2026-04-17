@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 import { fetchDocumentPreviewBlob } from '../../../services/documentService'
 import { findTextMatches } from '../highlightUtils'
 import RequestErrorState from '../RequestErrorState'
+import ViewerZoomControls, { buildViewerZoomStyle, clampViewerZoomLevel } from '../ViewerZoomControls'
 
 const PAGE_SIZE = 50
 
@@ -46,6 +47,7 @@ export default function TabularReader({
   locator,
   navRequest,
   onMatchStateChange,
+  onActiveSnippetChange,
 }) {
   const rootRef = useRef(null)
   const [workbook, setWorkbook] = useState([])
@@ -55,6 +57,7 @@ export default function TabularReader({
   const [activeSheet, setActiveSheet] = useState('')
   const [activeIndex, setActiveIndex] = useState(-1)
   const [pageBySheet, setPageBySheet] = useState({})
+  const [zoomLevel, setZoomLevel] = useState(1)
 
   useEffect(() => {
     let cancelled = false
@@ -64,6 +67,7 @@ export default function TabularReader({
       setError('')
       setAttempts(0)
       setActiveIndex(-1)
+      setZoomLevel(1)
       onMatchStateChange?.({ count: 0, activeIndex: -1 })
 
       try {
@@ -192,6 +196,29 @@ export default function TabularReader({
     return () => window.clearTimeout(timer)
   }, [activeMatch])
 
+  useEffect(() => {
+    if (!activeMatch) return
+
+    const sheet = workbook.find((item) => item.sheetName === activeMatch.sheetName)
+    const row = sheet?.rows?.[activeMatch.rowIndex]
+    const value = String((row || [])[activeMatch.colIndex] ?? '')
+    const snippet = value.replace(/\s+/g, ' ').trim().slice(0, 240)
+
+    onActiveSnippetChange?.({
+      docId: documentMeta?.id,
+      keyword: searchQuery,
+      locator: {
+        type: 'tabular',
+        keyword: searchQuery,
+        sheetName: activeMatch.sheetName,
+        rowIndex: activeMatch.rowIndex,
+        colIndex: activeMatch.colIndex,
+        matchIndex: activeIndex,
+      },
+      snippet,
+    })
+  }, [activeIndex, activeMatch, documentMeta?.id, onActiveSnippetChange, searchQuery, workbook])
+
   const currentSheet = workbook.find((sheet) => sheet.sheetName === activeSheet) || workbook[0]
   const currentPage = pageBySheet[currentSheet?.sheetName] || 1
 
@@ -244,7 +271,7 @@ export default function TabularReader({
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Spin tip="正在解析表格..." />
+        <Spin description="正在解析表格..." />
       </div>
     )
   }
@@ -267,9 +294,21 @@ export default function TabularReader({
     )
   }
 
+  const zoomStyle = buildViewerZoomStyle(zoomLevel)
+
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-gray-200 bg-white px-4 py-2">
+    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col">
+      <ViewerZoomControls
+        zoomLevel={zoomLevel}
+        onZoomChange={(updater) => {
+          setZoomLevel((current) => {
+            const next = typeof updater === 'function' ? updater(current) : updater
+            return clampViewerZoomLevel(next)
+          })
+        }}
+      />
+
+      <div className="border-b border-gray-200 bg-white px-4 py-2" style={zoomStyle}>
         <Tabs
           size="small"
           activeKey={activeSheet}
@@ -277,7 +316,7 @@ export default function TabularReader({
           items={workbook.map((sheet) => ({ key: sheet.sheetName, label: sheet.sheetName }))}
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden p-4">
+      <div className="min-h-0 flex-1 overflow-hidden p-4" style={zoomStyle}>
         <div className="h-full overflow-hidden rounded-lg border border-gray-200 bg-white">
           <Table
             size="small"

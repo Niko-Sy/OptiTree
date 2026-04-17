@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import { fetchDocumentPreviewBlob } from '../../../services/documentService'
 import { findTextMatches, highlightReactNode, renderHighlightedText } from '../highlightUtils'
 import RequestErrorState from '../RequestErrorState'
+import ViewerZoomControls, { buildViewerZoomStyle, clampViewerZoomLevel } from '../ViewerZoomControls'
 
 function deriveInitialMatchIndex(matches, locator) {
   if (!matches.length) return -1
@@ -22,6 +23,7 @@ export default function TextReader({
   locator,
   navRequest,
   onMatchStateChange,
+  onActiveSnippetChange,
 }) {
   const containerRef = useRef(null)
   const [content, setContent] = useState('')
@@ -29,6 +31,7 @@ export default function TextReader({
   const [error, setError] = useState('')
   const [attempts, setAttempts] = useState(0)
   const [activeIndex, setActiveIndex] = useState(-1)
+  const [zoomLevel, setZoomLevel] = useState(1)
 
   useEffect(() => {
     let cancelled = false
@@ -38,6 +41,7 @@ export default function TextReader({
       setError('')
       setAttempts(0)
       setActiveIndex(-1)
+      setZoomLevel(1)
       onMatchStateChange?.({ count: 0, activeIndex: -1 })
 
       try {
@@ -97,10 +101,32 @@ export default function TextReader({
     return () => window.clearTimeout(timer)
   }, [activeIndex, content, searchQuery])
 
+  useEffect(() => {
+    if (activeIndex < 0 || !matches.length) return
+    const activeMatch = matches[activeIndex]
+    if (!activeMatch) return
+
+    const start = Math.max(0, activeMatch.start - 28)
+    const end = Math.min(content.length, activeMatch.end + 56)
+    const snippet = content.slice(start, end).replace(/\s+/g, ' ').trim()
+
+    onActiveSnippetChange?.({
+      docId: documentMeta?.id,
+      keyword: searchQuery,
+      locator: {
+        type: 'text',
+        keyword: searchQuery,
+        startOffset: activeMatch.start,
+        matchIndex: activeIndex,
+      },
+      snippet,
+    })
+  }, [activeIndex, content, documentMeta?.id, matches, onActiveSnippetChange, searchQuery])
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Spin tip="正在加载文本..." />
+        <Spin description="正在加载文本..." />
       </div>
     )
   }
@@ -142,9 +168,21 @@ export default function TextReader({
     a: ({ children, ...props }) => <a {...props}>{highlightReactNode(children, searchQuery, activeIndex, counterRef, 'a')}</a>,
   }
 
+  const zoomStyle = buildViewerZoomStyle(zoomLevel)
+
   return (
-    <div ref={containerRef} className="h-full min-h-0 overflow-auto bg-[#f7f8fb] p-4">
-      <div className="mx-auto min-h-full max-w-4xl rounded-lg border border-gray-200 bg-white px-8 py-6 shadow-sm">
+    <div ref={containerRef} className="relative h-full min-h-0 overflow-auto bg-[#f7f8fb] p-4">
+      <ViewerZoomControls
+        zoomLevel={zoomLevel}
+        onZoomChange={(updater) => {
+          setZoomLevel((current) => {
+            const next = typeof updater === 'function' ? updater(current) : updater
+            return clampViewerZoomLevel(next)
+          })
+        }}
+      />
+
+      <div className="mx-auto min-h-full max-w-4xl rounded-lg border border-gray-200 bg-white px-8 py-6 shadow-sm" style={zoomStyle}>
         {isMarkdown ? (
           <div className="document-reader-markdown text-gray-800">
             <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
