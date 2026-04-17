@@ -5,7 +5,7 @@ import {
   UndoOutlined, RedoOutlined, DownloadOutlined, UploadOutlined,
   ApartmentOutlined, RobotOutlined, ArrowLeftOutlined, SaveOutlined,
   TeamOutlined, FileImageOutlined, FileSyncOutlined,
-  DownOutlined, ThunderboltOutlined,CheckOutlined, EditOutlined
+  DownOutlined, ThunderboltOutlined,CheckOutlined, EditOutlined, FileTextOutlined
 } from '@ant-design/icons'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { saveVersion } from '../../services/aiService'
@@ -23,6 +23,7 @@ import { validateFaultTree } from '../../utils/aiValidator'
 import { buildFaultTreeSVG, downloadSvg, downloadSvgAsPng } from '../../utils/exportUtils'
 import DocumentUploadModal from '../dashboard/DocumentUploadModal'
 import UpdateProjectModal from '../common/UpdateProjectModal'
+import { useDocumentReader } from '../document-reader/DocumentReaderProvider'
 
 const DEMO_JSON = {
   rootId: 'root',
@@ -126,6 +127,7 @@ export default function Toolbar({ projectName = '未命名项目', projectId, pr
   const state = { nodes, edges, historyIndex, history: { length: historyLen } }
   const { setGraph, setLayoutType, setAiIssues, undo, redo } = useEditorActions()
   const navigate = useNavigate()
+  const { openDocumentCenter, toggleCollapsed, isDockExpanded } = useDocumentReader()
   const [searchParams] = useSearchParams()
   const fileInputRef = useRef(null)
   const [showAiImport, setShowAiImport] = useState(false)
@@ -179,26 +181,20 @@ export default function Toolbar({ projectName = '未命名项目', projectId, pr
     return false // prevent antd auto upload
   }
 
-  // ── Load Demo ─────────────────────────────────────────────────
-  function handleLoadDemo() {
-    const rawNodes = DEMO_JSON.nodes.map(n => ({ width: 120, height: 60, ...n }))
-    const edges = DEMO_JSON.edges
-    const layoutType = 'vertical'
-    const laid = computeLayout(rawNodes, edges, canvasWidth || 900)
-    const anchoredEdges = withLayoutAnchors(laid, edges, layoutType)
-    setLayoutType(layoutType)
-    setGraph(laid, anchoredEdges)
-    setAiIssues([])
-    message.success('示例数据已加载')
-  }
-
   // ── Export JSON ───────────────────────────────────────────────
   function handleExport() {
     const exportData = {
       rootId: state.nodes.find(n =>
         !state.edges.some(e => e.to === n.id)
       )?.id || null,
-      nodes: state.nodes.map(({ x, y, width, height, ...rest }) => rest), // strip coordinates
+      nodes: state.nodes.map((node) => {
+        const next = { ...node }
+        delete next.x
+        delete next.y
+        delete next.width
+        delete next.height
+        return next
+      }),
       edges: state.edges.map(({ id, from, to }) => ({ id, from, to })),
     }
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
@@ -431,6 +427,18 @@ export default function Toolbar({ projectName = '未命名项目', projectId, pr
             onClick={handleAiCheck}
           >
             逻辑校验
+          </Button>
+        </Tooltip>
+
+        <Tooltip title={isDockExpanded ? '收起文档阅读器' : '展开文档阅读器'}>
+          <Button
+            icon={<FileTextOutlined />}
+            size="small"
+            type={isDockExpanded ? 'primary' : 'default'}
+            ghost={isDockExpanded}
+            onClick={() => (isDockExpanded ? toggleCollapsed() : openDocumentCenter())}
+          >
+            文档
           </Button>
         </Tooltip>
 

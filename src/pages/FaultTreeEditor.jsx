@@ -11,6 +11,8 @@ import PropertiesPanel from '../components/editor/PropertiesPanel'
 import StatusBar from '../components/editor/StatusBar'
 import { computeLayout } from '../utils/layoutAlgorithm'
 import AIAssistant from '../components/common/AIAssistant'
+import DocumentReaderDock from '../components/document-reader/DocumentReaderDock'
+import { DocumentReaderProvider, useDocumentReader } from '../components/document-reader/DocumentReaderProvider'
 import { getFaultTreeGraph, saveFaultTreeGraph } from '../services/faultTreeService'
 import { getProject } from '../services/projectService'
 
@@ -42,6 +44,7 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
   const nodes = _useRawStore(s => s.nodes, shallow)
   const edges = _useRawStore(s => s.edges, shallow)
   const { setGraph, setRevision } = useEditorActions()
+  const { controlRightOffset, isDockExpanded } = useDocumentReader()
 
   const canvasWidthRef = useRef(null)
   // AI 助手引用：由工具栏按钮触发弹出
@@ -52,8 +55,26 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
   const hiddenIdsRef = useRef(new Set())
   const [propsPanelCollapsed, setPropsPanelCollapsed] = useState(false)
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
-  const rightOffset = propsPanelCollapsed ? 0 : 256
+  const savedPropsPanelStateRef = useRef(null)
+  const rightOffset = Math.max(propsPanelCollapsed ? 0 : 256, controlRightOffset)
   const leftOffset = paletteCollapsed ? 0 : 208
+
+  useEffect(() => {
+    if (isDockExpanded) {
+      if (savedPropsPanelStateRef.current == null) {
+        savedPropsPanelStateRef.current = propsPanelCollapsed
+      }
+      if (!propsPanelCollapsed) {
+        setPropsPanelCollapsed(true)
+      }
+      return
+    }
+
+    if (savedPropsPanelStateRef.current != null) {
+      setPropsPanelCollapsed(savedPropsPanelStateRef.current)
+      savedPropsPanelStateRef.current = null
+    }
+  }, [isDockExpanded, propsPanelCollapsed])
 
   useEffect(() => {
     const handleShowNodeDetail = () => {
@@ -144,6 +165,7 @@ function EditorInner({ projectId, project, onProjectUpdated }) {
         <Canvas onSizeRef={canvasWidthRef} rightOffset={rightOffset} leftOffset={leftOffset} fitRef={fitRef} hiddenIdsRef={hiddenIdsRef} />
         <NodePalette collapsed={paletteCollapsed} onCollapsedChange={setPaletteCollapsed} />
         <PropertiesPanel collapsed={propsPanelCollapsed} onCollapsedChange={setPropsPanelCollapsed} />
+        <DocumentReaderDock />
       </div>
       <StatusBar />
       <AIAssistant ref={aiAssistantRef} contextType="faultTree" projectId={projectId} />
@@ -196,13 +218,15 @@ export default function FaultTreeEditor() {
 
   return (
     <EditorStoreProvider>
-      <EditorInner
-        projectId={projectId}
-        project={projectDetail || { id: projectId, type: 'ft', name: '未命名项目' }}
-        onProjectUpdated={(nextProject) => {
-          setProjectDetail(prev => ({ ...(prev || {}), ...(nextProject || {}) }))
-        }}
-      />
+      <DocumentReaderProvider projectId={projectId}>
+        <EditorInner
+          projectId={projectId}
+          project={projectDetail || { id: projectId, type: 'ft', name: '未命名项目' }}
+          onProjectUpdated={(nextProject) => {
+            setProjectDetail(prev => ({ ...(prev || {}), ...(nextProject || {}) }))
+          }}
+        />
+      </DocumentReaderProvider>
     </EditorStoreProvider>
   )
 }

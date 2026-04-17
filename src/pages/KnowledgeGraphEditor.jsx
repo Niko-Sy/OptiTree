@@ -14,6 +14,8 @@ import KgEntityPalette from '../components/knowledge/KgEntityPalette'
 import KgPropertiesPanel from '../components/knowledge/KgPropertiesPanel'
 import KgStatusBar from '../components/knowledge/KgStatusBar'
 import AIAssistant from '../components/common/AIAssistant'
+import DocumentReaderDock from '../components/document-reader/DocumentReaderDock'
+import { DocumentReaderProvider, useDocumentReader } from '../components/document-reader/DocumentReaderProvider'
 import { getKnowledgeGraph, saveKnowledgeGraph } from '../services/knowledgeGraphService'
 import { getProject } from '../services/projectService'
 
@@ -44,6 +46,7 @@ function hasBlockingTaskMeta(projectId) {
 function KnowledgeEditorInner({ kgId, project, onProjectUpdated }) {
   const { rfNodes, rfEdges } = useKnowledgeStore()
   const { setGraph } = useKnowledgeActions()
+  const { controlRightOffset, isDockExpanded } = useDocumentReader()
 
   // rfInstance 引用：由 KgCanvas 通过 onRfInit 回调写入，由 KgToolbar 用于 fitView
   const rfInstanceRef = useRef(null)
@@ -54,9 +57,27 @@ function KnowledgeEditorInner({ kgId, project, onProjectUpdated }) {
 
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [propsCollapsed, setPropsCollapsed] = useState(false)
+  const savedPropsPanelStateRef = useRef(null)
 
   const leftOffset  = paletteCollapsed ? 0 : 208
-  const rightOffset = propsCollapsed   ? 0 : 256
+  const rightOffset = Math.max(propsCollapsed ? 0 : 256, controlRightOffset)
+
+  useEffect(() => {
+    if (isDockExpanded) {
+      if (savedPropsPanelStateRef.current == null) {
+        savedPropsPanelStateRef.current = propsCollapsed
+      }
+      if (!propsCollapsed) {
+        setPropsCollapsed(true)
+      }
+      return
+    }
+
+    if (savedPropsPanelStateRef.current != null) {
+      setPropsCollapsed(savedPropsPanelStateRef.current)
+      savedPropsPanelStateRef.current = null
+    }
+  }, [isDockExpanded, propsCollapsed])
 
   // 加载状态 & 防重复保存
   const initDoneRef  = useRef(false)
@@ -124,6 +145,7 @@ function KnowledgeEditorInner({ kgId, project, onProjectUpdated }) {
         {/* 左右偏移量仅传入用于 Controls/MiniMap 的内部定位 */}
         <KgEntityPalette collapsed={paletteCollapsed} onCollapsedChange={setPaletteCollapsed} />
         <KgPropertiesPanel collapsed={propsCollapsed} onCollapsedChange={setPropsCollapsed} />
+        <DocumentReaderDock />
       </div>
       <KgStatusBar />
       <AIAssistant ref={aiAssistantRef} contextType="knowledgeGraph" projectId={kgId} />
@@ -176,13 +198,15 @@ export default function KnowledgeGraphEditor() {
 
   return (
     <KnowledgeStoreProvider>
-      <KnowledgeEditorInner
-        kgId={kgId}
-        project={projectDetail || { id: kgId, type: 'kg', name: '未命名知识图谱' }}
-        onProjectUpdated={(nextProject) => {
-          setProjectDetail(prev => ({ ...(prev || {}), ...(nextProject || {}) }))
-        }}
-      />
+      <DocumentReaderProvider projectId={kgId}>
+        <KnowledgeEditorInner
+          kgId={kgId}
+          project={projectDetail || { id: kgId, type: 'kg', name: '未命名知识图谱' }}
+          onProjectUpdated={(nextProject) => {
+            setProjectDetail(prev => ({ ...(prev || {}), ...(nextProject || {}) }))
+          }}
+        />
+      </DocumentReaderProvider>
     </KnowledgeStoreProvider>
   )
 }

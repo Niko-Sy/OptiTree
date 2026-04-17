@@ -6,6 +6,7 @@ const { TextArea } = Input
 import { DeleteOutlined, SaveOutlined, RobotOutlined, DisconnectOutlined, InfoCircleOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useEditorStore as _useRawStore, shallow } from '../../store/editorStore'
 import { useEditorActions } from '../../store/useEditorStore'
+import { useDocumentReader } from '../document-reader/DocumentReaderProvider'
 
 const TYPE_OPTIONS = [
   { value: 'topEvent',   label: '顶事件' },
@@ -59,6 +60,7 @@ function NodePanel() {
   const nodes          = _useRawStore(s => s.nodes, shallow)
   const aiIssues       = _useRawStore(s => s.aiIssues, shallow)
   const { updateNode, deleteNode } = useEditorActions()
+  const { openSourceReference } = useDocumentReader()
   const [form] = Form.useForm()
 
   const selected = nodes.find(n => n.id === selectedNodeId)
@@ -78,6 +80,14 @@ function NodePanel() {
   }, [selected, form])
 
   if (!selected) return null
+
+  function handleOpenSourceDocument() {
+    openSourceReference({
+      fileName: selected.sourceDocName,
+      page: selected.sourceDocPage,
+      excerpt: selected.sourceDocExcerpt,
+    })
+  }
 
   function handleApply() {
     form.validateFields().then(values => {
@@ -116,6 +126,13 @@ function NodePanel() {
                   {selected.sourceDocPage && (
                     <span className="text-gray-500 text-xs">第 {selected.sourceDocPage} 页</span>
                   )}
+                  <button
+                    type="button"
+                    onClick={handleOpenSourceDocument}
+                    className="border-0 bg-transparent p-0 text-[11px] text-blue-500 cursor-pointer hover:text-blue-600"
+                  >
+                    打开文档
+                  </button>
                 </div>
               </div>
             )}
@@ -254,6 +271,11 @@ function NodePanel() {
                 size="small"
               />
             </Form.Item>
+            {selected.sourceDocName && (
+              <Button size="small" block onClick={handleOpenSourceDocument}>
+                打开对应文档
+              </Button>
+            )}
           </>
         )}
       </Form>

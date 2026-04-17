@@ -9,12 +9,12 @@ import {
   DownloadOutlined, UploadOutlined, ApartmentOutlined,
   ThunderboltOutlined, SaveOutlined, TeamOutlined,
   RobotOutlined, FileImageOutlined, FileSyncOutlined, DownOutlined,
-  RadarChartOutlined, AppstoreOutlined, ClusterOutlined, EditOutlined,
+  RadarChartOutlined, AppstoreOutlined, ClusterOutlined, EditOutlined, FileTextOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useKnowledgeStore, useKnowledgeActions } from '../../store/useKnowledgeStore'
 import UserAvatar from '../common/UserAvatar'
-import { validateGraph, saveVersion } from '../../services/aiService'
+import { saveVersion } from '../../services/aiService'
 import { buildKgSVG, downloadSvg, downloadSvgAsPng } from '../../utils/exportUtils'
 import {
   applyDagreLayout, resolveOverlaps,
@@ -23,10 +23,12 @@ import {
 } from '../../utils/layoutAlgorithm'
 import DocumentUploadModal from '../dashboard/DocumentUploadModal'
 import UpdateProjectModal from '../common/UpdateProjectModal'
+import { useDocumentReader } from '../document-reader/DocumentReaderProvider'
 
 // ─── 工具栏主组件 ────────────────────────────────────────────────────
-export default function KgToolbar({ kgName, kgId, project, onProjectUpdated, rfInstanceRef, aiAssistantRef, fitRef }) {
+export default function KgToolbar({ kgName, kgId, project, onProjectUpdated, aiAssistantRef, fitRef }) {
   const navigate = useNavigate()
+  const { openDocumentCenter, toggleCollapsed, isDockExpanded } = useDocumentReader()
   const { rfNodes, rfEdges, historyIndex, history } = useKnowledgeStore()
   const { setGraph, setAiIssues, undo, redo } = useKnowledgeActions()
   const fileInputRef = useRef(null)
@@ -119,7 +121,12 @@ export default function KgToolbar({ kgName, kgId, project, onProjectUpdated, rfI
     targetNodes = resolveOverlaps(targetNodes)
 
     // 3. 清除固定 Handle 引用（浮动边模式无需绑定 Handle）
-    const edges0 = rfEdges.map(({ sourceHandle: _sh, targetHandle: _th, ...rest }) => rest)
+    const edges0 = rfEdges.map((edge) => {
+      const next = { ...edge }
+      delete next.sourceHandle
+      delete next.targetHandle
+      return next
+    })
 
     // 4. 并行多边曲率偏移（3C）
     const targetEdges = assignParallelEdgeOffsets(edges0)
@@ -274,6 +281,18 @@ export default function KgToolbar({ kgName, kgId, project, onProjectUpdated, rfI
       >
         <Button icon={<ApartmentOutlined />} size="small">排版 <DownOutlined /></Button>
       </Dropdown>
+
+      <Tooltip title={isDockExpanded ? '收起文档阅读器' : '展开文档阅读器'}>
+        <Button
+          icon={<FileTextOutlined />}
+          size="small"
+          type={isDockExpanded ? 'primary' : 'default'}
+          ghost={isDockExpanded}
+          onClick={() => (isDockExpanded ? toggleCollapsed() : openDocumentCenter())}
+        >
+          文档
+        </Button>
+      </Tooltip>
 
       {/* AI 助手 */}
       <Tooltip title="AI 助手">
