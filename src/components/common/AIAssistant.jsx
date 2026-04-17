@@ -121,11 +121,13 @@ const AGENT_THINKING_TONE_META = {
 function getInitialPanelSize() {
   const vw = window.innerWidth
   const vh = window.innerHeight
+  const minW = Math.min(PANEL_MIN_W, Math.max(280, vw - EDGE_PAD * 2))
+  const minH = Math.min(PANEL_MIN_H, Math.max(360, vh - TOP_NAV_H - EDGE_PAD * 2))
   const maxW = Math.floor(vw * 0.42)
   const maxH = vh - TOP_NAV_H - EDGE_PAD * 2
   return {
-    width:  Math.min(Math.max(PANEL_MIN_W, Math.round(vw * 0.27)), maxW),
-    height: Math.min(Math.max(PANEL_MIN_H, Math.round(vh * 0.62)), maxH),
+    width:  Math.min(Math.max(minW, Math.round(vw * 0.27)), maxW),
+    height: Math.min(Math.max(minH, Math.round(vh * 0.62)), maxH),
   }
 }
 
@@ -457,7 +459,89 @@ function MarkdownContent({ content }) {
 }
 
 // ─── 消息气泡 ────────────────────────────────────────────────────────
-function MessageBubble({ role, content, isPartial }) {
+function AgentThinkingInline({
+  steps,
+  expanded,
+  running,
+  onToggleExpand,
+}) {
+  const stepCount = Array.isArray(steps) ? steps.length : 0
+  if (!stepCount) return null
+
+  return (
+    <div className="agent-thinking-inline">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        className="agent-thinking-inline-head"
+      >
+        <span className="agent-thinking-inline-arrow">
+          {expanded ? <DownOutlined style={{ fontSize: 10 }} /> : <RightOutlined style={{ fontSize: 10 }} />}
+        </span>
+        <span className="agent-thinking-inline-title">
+          {running ? '思考中...' : `已完成 ${stepCount} 步思考`}
+        </span>
+        {running && <span className="agent-thinking-live-dot" />}
+      </button>
+      {expanded && (
+        <div className="agent-thinking-inline-body">
+          {steps.map((step, idx) => {
+            const toneMeta = AGENT_THINKING_TONE_META[step.tone] || AGENT_THINKING_TONE_META.info
+            const isLast = idx === steps.length - 1
+            return (
+              <div key={step.id} className="agent-thinking-inline-item">
+                <span
+                  className="agent-thinking-inline-dot"
+                  style={{ background: toneMeta.dot }}
+                />
+                {!isLast && <span className="agent-thinking-inline-line" />}
+                <div className="agent-thinking-inline-main">
+                  <div className="agent-thinking-inline-item-head">
+                    <span style={{ color: toneMeta.text }}>{step.label}</span>
+                    <span>{formatThinkingTime(step.ts)}</span>
+                  </div>
+                  <div className="agent-thinking-inline-item-msg">{step.message}</div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AgentThinkingBubble({
+  steps,
+  expanded,
+  running,
+  onToggleExpand,
+}) {
+  const hasSteps = Array.isArray(steps) && steps.length > 0
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 10 }}>
+      <div className="ai-msg-avatar">
+        <RobotOutlined style={{ color: '#fff', fontSize: 13 }} />
+      </div>
+      <div className="ai-msg-wrap">
+        <div className="ai-msg ai-msg-assistant">
+          {hasSteps ? (
+            <AgentThinkingInline
+              steps={steps}
+              expanded={expanded}
+              running={running}
+              onToggleExpand={onToggleExpand}
+            />
+          ) : (
+            <div className="agent-thinking-inline-empty">正在建立上下文并规划执行步骤...</div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MessageBubble({ role, content, isPartial, agentSteps, thinkingExpanded, onToggleThinking, showThinkingInline, thinkingRunning }) {
   const isUser = role === 'user'
 
   const handleCopy = async () => {
@@ -487,25 +571,20 @@ function MessageBubble({ role, content, isPartial }) {
   return (
     <div style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start', marginBottom: 10 }}>
       {!isUser && (
-        <div style={{
-          width: 28, height: 28, borderRadius: '50%',
-          background: 'linear-gradient(135deg,#1677ff,#4096ff)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, marginRight: 8, marginTop: 2,
-        }}>
+        <div className="ai-msg-avatar">
           <RobotOutlined style={{ color: '#fff', fontSize: 13 }} />
         </div>
       )}
-      <div style={{ maxWidth: '85%', display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
-        <div style={{
-          width: '100%',
-          padding: '8px 12px',
-          borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-          background: isUser ? 'linear-gradient(135deg,#1677ff,#4096ff)' : '#f0f2f5',
-          color: isUser ? '#fff' : '#1a1a1a',
-          fontSize: 13, lineHeight: 1.6, wordBreak: 'break-word',
-          boxShadow: isUser ? '0 2px 8px rgba(22,119,255,0.25)' : '0 1px 4px rgba(0,0,0,0.08)',
-        }}>
+      <div className={`ai-msg-wrap ${isUser ? 'ai-msg-wrap-user' : ''}`}>
+        <div className={`ai-msg ${isUser ? 'ai-msg-user' : 'ai-msg-assistant'}`}>
+          {!isUser && showThinkingInline && Array.isArray(agentSteps) && agentSteps.length > 0 && (
+            <AgentThinkingInline
+              steps={agentSteps}
+              expanded={thinkingExpanded}
+              running={thinkingRunning}
+              onToggleExpand={onToggleThinking}
+            />
+          )}
           {!isUser && isPartial && (
             <div style={{ marginBottom: 6 }}>
               <Tag color="orange" style={{ marginInlineEnd: 0, fontSize: 11 }}>部分回答</Tag>
@@ -525,165 +604,15 @@ function MessageBubble({ role, content, isPartial }) {
           }}
           
           disabled={!content}
-          style={{
-            marginTop: 4,
-            marginLeft: isUser ? 0 : 8,
-            marginRight: isUser ? 8 : 0,
-            border: 'none',
-            background: 'transparent',
-            borderRadius: 6,
-            color: '#999',
-            fontSize: 12,
-            lineHeight: 1,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            cursor: content ? 'pointer' : 'not-allowed',
-            opacity: content ? 0.6 : 0.3,
-            padding: '2px',
-            transition: 'all 0.2s ease',
-            
-          }}
+          className={`ai-copy-btn ${isUser ? 'is-user' : ''}`}
+          style={{ cursor: content ? 'pointer' : 'not-allowed', opacity: content ? undefined : 0.3 }}
         >
           {/* <CopyOutlined style={{ fontSize: 14 }} /> */}
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill='none' viewBox="0 0 20 20" aria-hidden="true" class="icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill='none' viewBox="0 0 20 20" aria-hidden="true" className="icon">
             <path xmlns="http://www.w3.org/2000/svg" d="M12.668 10.667c0-.71 0-1.204-.031-1.588a2.4 2.4 0 0 0-.113-.615l-.055-.13a1.84 1.84 0 0 0-.676-.731l-.127-.072c-.158-.08-.37-.137-.745-.168-.384-.031-.877-.031-1.588-.031H6.5c-.711 0-1.204 0-1.588.031a2.4 2.4 0 0 0-.615.113l-.13.055a1.84 1.84 0 0 0-.731.676l-.07.127c-.081.158-.138.37-.169.745-.031.384-.032.877-.032 1.588V13.5c0 .711 0 1.204.032 1.588.031.376.088.587.168.745l.07.126c.177.288.43.522.732.676l.13.056c.144.052.333.089.615.112.384.031.877.032 1.588.032h2.833c.71 0 1.204 0 1.588-.032.376-.031.587-.088.745-.168l.127-.07c.287-.177.522-.43.676-.732l.055-.13c.052-.144.09-.333.113-.615.031-.384.031-.877.031-1.588zm1.33 1.998c.455-.002.803-.005 1.09-.028.376-.031.587-.088.745-.168l.126-.071c.288-.177.522-.43.676-.732l.056-.13a2.4 2.4 0 0 0 .112-.615c.031-.384.032-.877.032-1.588V6.5c0-.711 0-1.204-.032-1.588a2.4 2.4 0 0 0-.112-.615l-.056-.13a1.84 1.84 0 0 0-.676-.731l-.126-.07c-.158-.081-.37-.138-.745-.169-.384-.031-.877-.032-1.588-.032h-2.833c-.71 0-1.204.001-1.588.032-.282.023-.471.06-.615.112l-.13.056a1.84 1.84 0 0 0-.731.676l-.072.126c-.08.158-.137.37-.168.745-.023.287-.027.635-.029 1.09h1.999c.689 0 1.246 0 1.696.036.458.038.865.117 1.242.309l.217.122c.496.304.9.74 1.165 1.26l.067.143c.144.337.21.698.242 1.099.037.45.036 1.007.036 1.696zm4.167-3.332c0 .689 0 1.246-.036 1.696-.033.401-.098.762-.242 1.099l-.067.143c-.265.52-.67.956-1.165 1.26l-.219.122c-.376.192-.782.271-1.24.309-.337.027-.734.031-1.2.033-.003.467-.007.864-.034 1.201-.033.401-.098.762-.242 1.098l-.067.142c-.265.522-.669.958-1.165 1.262l-.217.122c-.377.192-.784.271-1.242.309-.45.037-1.007.036-1.696.036H6.5c-.69 0-1.246 0-1.696-.036-.4-.033-.762-.098-1.098-.242l-.143-.067a3.17 3.17 0 0 1-1.261-1.165l-.122-.219c-.192-.376-.271-.782-.309-1.24-.037-.45-.036-1.007-.036-1.696v-2.833c0-.689 0-1.246.036-1.696.038-.458.117-.865.309-1.242l.122-.217c.304-.496.74-.9 1.261-1.165l.143-.067c.336-.144.697-.21 1.098-.242.337-.027.733-.032 1.2-.034.002-.467.007-.863.034-1.2.037-.458.117-.864.309-1.24l.122-.22c.304-.495.74-.899 1.26-1.164l.143-.067c.337-.144.698-.21 1.099-.242.45-.037 1.007-.036 1.696-.036H13.5c.69 0 1.246 0 1.696.036.458.038.864.117 1.24.309l.22.122c.495.304.899.74 1.164 1.261l.067.143c.144.336.21.697.242 1.098.037.45.036 1.007.036 1.696z" fill='currentcolor'/>
           </svg>
         </button>
       </div>
-    </div>
-  )
-}
-
-function AgentThinkingPanel({
-  steps,
-  expanded,
-  running,
-  onToggleExpand,
-}) {
-  const stepCount = Array.isArray(steps) ? steps.length : 0
-
-  return (
-    <div style={{
-      marginBottom: 10,
-      border: '1px solid rgba(22,119,255,0.18)',
-      background: 'linear-gradient(180deg, rgba(230,244,255,0.72) 0%, #fff 60%)',
-      borderRadius: 12,
-      overflow: 'hidden',
-      boxShadow: '0 6px 18px rgba(22,119,255,0.08)',
-    }}>
-      <button
-        type="button"
-        onClick={onToggleExpand}
-        style={{
-          width: '100%',
-          border: 'none',
-          cursor: 'pointer',
-          background: 'transparent',
-          padding: '9px 10px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          textAlign: 'left',
-        }}
-      >
-        <div style={{
-          width: 18,
-          display: 'flex',
-          justifyContent: 'center',
-          color: '#6b7280',
-          flexShrink: 0,
-        }}>
-          {expanded ? <DownOutlined style={{ fontSize: 11 }} /> : <RightOutlined style={{ fontSize: 11 }} />}
-        </div>
-        <div style={{
-          flex: 1,
-          minWidth: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}>
-          <span style={{ fontSize: 12, color: '#111827', fontWeight: 700 }}>Agent 执行轨迹</span>
-          <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>{stepCount} 步</Tag>
-          {running && (
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-              fontSize: 10,
-              color: '#006d75',
-              background: 'rgba(19,168,168,0.1)',
-              border: '1px solid rgba(19,168,168,0.25)',
-              borderRadius: 999,
-              padding: '1px 7px',
-            }}>
-              <span className="agent-thinking-live-dot" />
-              执行中
-            </span>
-          )}
-        </div>
-      </button>
-
-      {expanded && (
-        <div className="agent-thinking-scroll" style={{
-          maxHeight: 190,
-          overflowY: 'auto',
-          padding: '2px 10px 10px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 7,
-        }}>
-          {stepCount === 0 && (
-            <div style={{
-              fontSize: 12,
-              color: '#6b7280',
-              border: '1px dashed rgba(107,114,128,0.28)',
-              borderRadius: 10,
-              padding: '8px 10px',
-              background: 'rgba(255,255,255,0.7)',
-            }}>
-              正在等待 Agent 返回过程事件...
-            </div>
-          )}
-
-          {steps.map((step) => {
-            const toneMeta = AGENT_THINKING_TONE_META[step.tone] || AGENT_THINKING_TONE_META.info
-            return (
-              <div key={step.id} style={{
-                border: `1px solid ${toneMeta.border}`,
-                background: toneMeta.bg,
-                borderRadius: 10,
-                padding: '7px 9px',
-              }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 7,
-                  marginBottom: 4,
-                }}>
-                  <span style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: toneMeta.dot,
-                    flexShrink: 0,
-                    boxShadow: `0 0 0 3px ${toneMeta.bg}`,
-                  }} />
-                  <span style={{ fontSize: 11, color: toneMeta.text, fontWeight: 600 }}>
-                    {step.label}
-                  </span>
-                  <span style={{ marginLeft: 'auto', fontSize: 10, color: '#9ca3af' }}>
-                    {formatThinkingTime(step.ts)}
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: '#1f2937', lineHeight: 1.55 }}>
-                  {step.message}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }
@@ -932,9 +861,11 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
       setPanelSize(sz => {
         const maxW = Math.floor(window.innerWidth  * 0.42)
         const maxH = window.innerHeight - TOP_NAV_H - EDGE_PAD * 2
+        const minW = Math.min(PANEL_MIN_W, Math.max(280, window.innerWidth - EDGE_PAD * 2))
+        const minH = Math.min(PANEL_MIN_H, Math.max(360, window.innerHeight - TOP_NAV_H - EDGE_PAD * 2))
         return {
-          width:  Math.min(Math.max(PANEL_MIN_W, sz.width),  maxW),
-          height: Math.min(Math.max(PANEL_MIN_H, sz.height), maxH),
+          width:  Math.min(Math.max(minW, sz.width),  maxW),
+          height: Math.min(Math.max(minH, sz.height), maxH),
         }
       })
     }
@@ -1126,8 +1057,9 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 Math.round(vh * PANEL_EXPAND_RATIO),
                 vh - TOP_NAV_H - EDGE_PAD * 2,
               )
+              const minH = Math.min(PANEL_MIN_H, Math.max(360, window.innerHeight - TOP_NAV_H - EDGE_PAD * 2))
               setIsAutoExpanding(true)
-              setPanelSize(prev => ({ ...prev, height: Math.max(targetH, PANEL_MIN_H) }))
+              setPanelSize(prev => ({ ...prev, height: Math.max(targetH, minH) }))
               setTimeout(() => setIsAutoExpanding(false), 520)
             }
           }
@@ -1401,8 +1333,9 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 Math.round(vh * PANEL_EXPAND_RATIO),
                 vh - TOP_NAV_H - EDGE_PAD * 2,
               )
+              const minH = Math.min(PANEL_MIN_H, Math.max(360, window.innerHeight - TOP_NAV_H - EDGE_PAD * 2))
               setIsAutoExpanding(true)
-              setPanelSize(prev => ({ ...prev, height: Math.max(targetH, PANEL_MIN_H) }))
+              setPanelSize(prev => ({ ...prev, height: Math.max(targetH, minH) }))
               setTimeout(() => setIsAutoExpanding(false), 520)
             }
           }
@@ -1871,12 +1804,14 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     const dy  = e.clientY - r.startMY
     const maxW = Math.floor(window.innerWidth  * 0.42)
     const maxH = window.innerHeight - TOP_NAV_H - EDGE_PAD * 2
+    const minW = Math.min(PANEL_MIN_W, Math.max(280, window.innerWidth - EDGE_PAD * 2))
+    const minH = Math.min(PANEL_MIN_H, Math.max(360, window.innerHeight - TOP_NAV_H - EDGE_PAD * 2))
     setPanelSize(prev => ({
       width:  (r.edge === 'right'  || r.edge === 'corner')
-        ? Math.min(maxW, Math.max(PANEL_MIN_W, r.startW + dx))
+        ? Math.min(maxW, Math.max(minW, r.startW + dx))
         : prev.width,
       height: (r.edge === 'bottom' || r.edge === 'corner')
-        ? Math.min(maxH, Math.max(PANEL_MIN_H, r.startH + dy))
+        ? Math.min(maxH, Math.max(minH, r.startH + dy))
         : prev.height,
     }))
   }, [])
@@ -1903,6 +1838,8 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
 
   // ── 派生值 ───────────────────────────────────────────────────
   const panelPos    = calcPanelPos(pos.x, pos.y, panelSize.width, panelSize.height)
+  const panelMinW   = Math.min(PANEL_MIN_W, Math.max(280, window.innerWidth - EDGE_PAD * 2))
+  const panelMinH   = Math.min(PANEL_MIN_H, Math.max(360, window.innerHeight - TOP_NAV_H - EDGE_PAD * 2))
   const bubbleRight = pos.x < BUBBLE_W + EDGE_PAD * 2
   const bubbleTop   = pos.y + BTN_SIZE / 2 - 19
 
@@ -1913,8 +1850,8 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
         .ai-quick-scroll::-webkit-scrollbar { display: none; }
         .ai-quick-scroll { scrollbar-width: none; -ms-overflow-style: none; }
         .ai-input-box:focus-within {
-          border-color: #4096ff !important;
-          box-shadow: 0 0 0 3px rgba(22,119,255,0.1) !important;
+          border-color: #60a5fa !important;
+          box-shadow: 0 0 0 4px rgba(59,130,246,0.13) !important;
         }
         .ai-quick-btn:hover:not(:disabled) {
           background: #deeaff !important;
@@ -1930,14 +1867,181 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
           padding-left: 4px !important;
         }
         .ai-model-sel .ant-select-selection-item {
-          color: #595959;
+          color: #475569;
           font-size: 11px;
+          font-weight: 600;
         }
         .ai-model-sel .ant-select-arrow { color: #aab0c0; }
-        .agent-thinking-scroll::-webkit-scrollbar { width: 6px; }
-        .agent-thinking-scroll::-webkit-scrollbar-thumb {
+        .ai-conv-sel .ant-select-selector {
+          min-height: 28px !important;
+          border-radius: 9px !important;
+          border-color: #d9e5ff !important;
+          background: #ffffff !important;
+        }
+        .ai-conv-sel .ant-select-selection-item {
+          white-space: normal;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          line-height: 1.35;
+          color: #334155;
+        }
+        .ai-conv-sel-dropdown .ant-select-item-option-content {
+          white-space: normal;
+          word-break: break-word;
+          line-height: 1.45;
+        }
+        .agent-thinking-inline-body::-webkit-scrollbar {
+          width: 6px;
+        }
+        .agent-thinking-inline-body::-webkit-scrollbar-thumb {
           background: rgba(148,163,184,0.45);
           border-radius: 999px;
+        }
+        .ai-msg-avatar {
+          width: 28px;
+          height: 28px;
+          border-radius: 9px;
+          background: linear-gradient(135deg, #1677ff, #60a5fa);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          margin-right: 8px;
+          margin-top: 2px;
+          box-shadow: 0 4px 10px rgba(22,119,255,0.25);
+        }
+        .ai-msg-wrap {
+          max-width: 88%;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .ai-msg-wrap-user {
+          align-items: flex-end;
+        }
+        .ai-msg {
+          width: 100%;
+          padding: 9px 12px;
+          border-radius: 14px;
+          font-size: 13px;
+          line-height: 1.6;
+          word-break: break-word;
+        }
+        .ai-msg-assistant {
+          border-radius: 14px 14px 14px 4px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          color: #0f172a;
+          box-shadow: 0 1px 4px rgba(15,23,42,0.06);
+        }
+        .ai-msg-user {
+          border-radius: 14px 14px 4px 14px;
+          background: linear-gradient(135deg,#1677ff,#4096ff);
+          color: #fff;
+          box-shadow: 0 4px 12px rgba(22,119,255,0.28);
+        }
+        .ai-copy-btn {
+          margin-top: 4px;
+          border: none;
+          background: transparent;
+          border-radius: 6px;
+          color: #94a3b8;
+          font-size: 12px;
+          line-height: 1;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          opacity: 0;
+          padding: 2px;
+          transition: all 0.2s ease;
+        }
+        .ai-copy-btn.is-user {
+          margin-right: 8px;
+        }
+        .ai-msg-wrap:not(.ai-msg-wrap-user) .ai-copy-btn {
+          margin-left: 8px;
+        }
+        .ai-msg-wrap:hover .ai-copy-btn {
+          opacity: 0.76;
+        }
+        .agent-thinking-inline {
+          margin-bottom: 8px;
+          border: 1px solid #dbeafe;
+          background: #eff6ff;
+          border-radius: 10px;
+          overflow: hidden;
+        }
+        .agent-thinking-inline-head {
+          width: 100%;
+          border: none;
+          background: transparent;
+          padding: 7px 9px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          text-align: left;
+          cursor: pointer;
+          color: #1d4ed8;
+        }
+        .agent-thinking-inline-arrow {
+          width: 14px;
+          display: inline-flex;
+          justify-content: center;
+          color: #475569;
+        }
+        .agent-thinking-inline-title {
+          font-size: 11px;
+          font-weight: 700;
+          color: #1e3a8a;
+        }
+        .agent-thinking-inline-body {
+          max-height: 190px;
+          overflow-y: auto;
+          padding: 2px 9px 8px;
+        }
+        .agent-thinking-inline-item {
+          position: relative;
+          display: flex;
+          gap: 8px;
+          padding: 4px 0 7px;
+        }
+        .agent-thinking-inline-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          margin-top: 4px;
+          flex-shrink: 0;
+        }
+        .agent-thinking-inline-line {
+          position: absolute;
+          left: 3px;
+          top: 14px;
+          bottom: -3px;
+          width: 1px;
+          background: #bfdbfe;
+        }
+        .agent-thinking-inline-main {
+          flex: 1;
+          min-width: 0;
+        }
+        .agent-thinking-inline-item-head {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          justify-content: space-between;
+          font-size: 10px;
+          color: #64748b;
+          margin-bottom: 2px;
+        }
+        .agent-thinking-inline-item-msg {
+          font-size: 11px;
+          color: #334155;
+          line-height: 1.55;
+        }
+        .agent-thinking-inline-empty {
+          font-size: 11px;
+          color: #475569;
+          line-height: 1.6;
         }
         .agent-thinking-live-dot {
           width: 6px;
@@ -1966,12 +2070,13 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
             width:  panelSize.width,
             height: panelSize.height,
             zIndex: 1001,
-            borderRadius: 18,
+            borderRadius: 20,
             background: '#fff',
-            boxShadow: '0 24px 64px rgba(0,0,0,0.15),0 4px 16px rgba(22,119,255,0.08)',
+            backdropFilter: 'blur(20px)',
+            boxShadow: '0 32px 72px rgba(0,0,0,0.14), 0 8px 24px rgba(22,119,255,0.07)',
             display: 'flex', flexDirection: 'column',
             overflow: 'hidden',
-            minWidth: PANEL_MIN_W, minHeight: PANEL_MIN_H,
+            minWidth: panelMinW, minHeight: panelMinH,
             transition: isAutoExpanding
               ? 'height 0.45s cubic-bezier(0.34,1.3,0.64,1)'
               : 'none',
@@ -1980,7 +2085,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
           {/* ── 标题栏 ────────────────────────────────────────── */}
           <div style={{
             padding: '9px 14px 8px',
-            background: 'linear-gradient(135deg,#1677ff 0%,#3b8cff 55%,#5aabff 100%)',
+            background: 'linear-gradient(120deg,#0f2a5f 0%,#1d4ed8 42%,#3b82f6 100%)',
             display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
           }}>
             <div style={{ flex: 1, minWidth: 0 ,paddingLeft: 8 }}>
@@ -1989,18 +2094,20 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               </div>
               {supportsAgent && (
                 <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ display: 'inline-flex', borderRadius: 999, background: 'rgba(255,255,255,0.18)', padding: 2 }}>
+                  <div style={{ display: 'inline-flex', borderRadius: 999, background: 'rgba(255,255,255,0.2)', padding: 2, border: '1px solid rgba(255,255,255,0.32)' }}>
                     <button
                       type="button"
                       onClick={() => handleModeSwitch('ask')}
                       style={{
                         border: 'none',
                         borderRadius: 999,
-                        padding: '2px 9px',
+                        padding: '3px 10px',
                         fontSize: 11,
                         color: '#fff',
+                        fontWeight: effectiveMode === 'ask' ? 700 : 500,
                         background: effectiveMode === 'ask' ? 'rgba(255,255,255,0.34)' : 'transparent',
                         cursor: loading ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s ease',
                       }}
                       disabled={loading}
                     >
@@ -2012,11 +2119,13 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                       style={{
                         border: 'none',
                         borderRadius: 999,
-                        padding: '2px 9px',
+                        padding: '3px 10px',
                         fontSize: 11,
                         color: '#fff',
+                        fontWeight: effectiveMode === 'agent' ? 700 : 500,
                         background: effectiveMode === 'agent' ? 'rgba(255,255,255,0.34)' : 'transparent',
                         cursor: loading ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s ease',
                       }}
                       disabled={loading}
                     >
@@ -2024,7 +2133,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                     </button>
                   </div>
                   {effectiveMode === 'agent' && (
-                    <Tag style={{ marginInlineEnd: 0, border: 'none', background: 'rgba(255,255,255,0.24)', color: '#fff', fontSize: 10 }}>
+                    <Tag style={{ marginInlineEnd: 0, border: '1px solid rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.2)', color: '#fff', fontSize: 10, borderRadius: 999 }}>
                       {AGENT_STATE_LABELS[agentState] || agentState}
                     </Tag>
                   )}
@@ -2089,6 +2198,8 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               onClear={handleNewConversation}
               style={{ flex: 1, fontSize: 11 }}
               popupMatchSelectWidth={false}
+              className="ai-conv-sel"
+              popupClassName="ai-conv-sel-dropdown"
             />
             <Tooltip title="刷新会话列表">
               <button
@@ -2107,7 +2218,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
           </div>
 
           {/* ── 消息区 ───────────────────────────────────────── */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 12px 8px', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, overflowY: 'scroll', padding: '12px 12px 8px', display: 'flex', flexDirection: 'column' }}>
             {streamNotice && (
               <div style={{
                 marginBottom: 8, fontSize: 11, lineHeight: 1.6,
@@ -2117,15 +2228,6 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
               }}>
                 {streamNotice}
               </div>
-            )}
-
-            {effectiveMode === 'agent' && (
-              <AgentThinkingPanel
-                steps={thinkingSteps}
-                expanded={thinkingExpanded}
-                running={loading || agentState === 'running'}
-                onToggleExpand={() => setThinkingExpanded((prev) => !prev)}
-              />
             )}
 
             {/* 加载更多历史 */}
@@ -2161,16 +2263,16 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 gap: 12, paddingBottom: 20,
               }}>
                 <div style={{
-                  width: 54, height: 54, borderRadius: '50%',
-                  background: 'linear-gradient(135deg,#eef4ff,#dbeafe)',
+                  width: 58, height: 58, borderRadius: 16,
+                  background: 'linear-gradient(135deg,#e0ecff,#dbeafe 45%,#eff6ff)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 2px 12px rgba(22,119,255,0.1)',
+                  boxShadow: '0 8px 18px rgba(22,119,255,0.15)',
                 }}>
-                  <RobotOutlined style={{ fontSize: 26, color: '#93c5fd' }} />
+                  <RobotOutlined style={{ fontSize: 27, color: '#60a5fa' }} />
                 </div>
-                <div style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.85, color: '#b8bec8' }}>
-                  你好！我是{CONTEXT_LABELS[contextType]}<br />
-                  <span style={{ fontSize: 11 }}>选择快捷提问或直接输入问题</span>
+                <div style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.8, color: '#94a3b8' }}>
+                  欢迎使用{CONTEXT_LABELS[contextType]}<br />
+                  <span style={{ fontSize: 11 }}>可以选择快捷提问，或直接描述你的任务目标</span>
                 </div>
               </div>
             )}
@@ -2181,27 +2283,43 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 role={m.role}
                 content={m.content}
                 isPartial={m.isPartial}
+                agentSteps={thinkingSteps}
+                thinkingExpanded={thinkingExpanded}
+                onToggleThinking={() => setThinkingExpanded((prev) => !prev)}
+                thinkingRunning={loading || agentState === 'running'}
+                showThinkingInline={
+                  effectiveMode === 'agent'
+                  && m.role === 'ai'
+                  && messages[messages.length - 1]?.id === m.id
+                  && thinkingSteps.length > 0
+                }
               />
             ))}
 
             {isTyping && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <div style={{
-                  width: 26, height: 26, borderRadius: '50%',
-                  background: 'linear-gradient(135deg,#1677ff,#4096ff)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                }}>
-                  <RobotOutlined style={{ color: '#fff', fontSize: 12 }} />
+              effectiveMode === 'agent' ? (
+                <AgentThinkingBubble
+                  steps={thinkingSteps}
+                  expanded={thinkingExpanded}
+                  running
+                  onToggleExpand={() => setThinkingExpanded((prev) => !prev)}
+                />
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <div className="ai-msg-avatar">
+                    <RobotOutlined style={{ color: '#fff', fontSize: 12 }} />
+                  </div>
+                  <div style={{
+                    padding: '8px 14px', background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '12px 12px 12px 4px',
+                    display: 'flex', alignItems: 'center', gap: 7,
+                  }}>
+                    <Spin size="small" />
+                    <span style={{ fontSize: 11, color: '#64748b' }}>AI 助手正在思考...</span>
+                  </div>
                 </div>
-                <div style={{
-                  padding: '8px 14px', background: '#f0f2f5',
-                  borderRadius: '12px 12px 12px 4px',
-                  display: 'flex', alignItems: 'center', gap: 7,
-                }}>
-                  <Spin size="small" />
-                  <span style={{ fontSize: 11, color: '#8c8c8c' }}>AI 助手正在思考...</span>
-                </div>
-              </div>
+              )
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -2257,7 +2375,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 display: 'flex', flexDirection: 'column',
                 overflow: 'hidden',
                 transition: 'border-color 0.2s, box-shadow 0.2s',
-                boxShadow: '0 1px 6px rgba(22,119,255,0.05)',
+                boxShadow: '0 2px 10px rgba(22,119,255,0.07)',
               }}
             >
               {/* 文本输入 */}
@@ -2288,7 +2406,7 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
                 borderRadius: '14px',
                 padding: '4px 8px 6px',
                 borderTop: '1px solid #f0f3fa',
-                background: '#f8faff',
+                background: 'linear-gradient(180deg,#f8fbff,#f3f8ff)',
               }}>
                 {models.length > 0 && (
                   <Select

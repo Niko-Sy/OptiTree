@@ -111,7 +111,7 @@ function NodePanel() {
   return (
     <>
       {/* Extended metadata from external format import */}
-      {(selected.eventId || selected.description || selected.gateType ||
+      {/* {(selected.eventId || selected.description || selected.gateType ||
         (selected.rules && selected.rules.length > 0) || selected.investigateMethod) && (
         <div className="mt-0 mb-2">
           <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">事件详情</div>
@@ -190,7 +190,7 @@ function NodePanel() {
             )}
           </div>
         </div>
-      )}
+      )} */}
 
       <Form form={form} layout="vertical" size="small" className="my-form">
         {/* <Form.Item label="ID">
