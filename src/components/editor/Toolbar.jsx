@@ -80,7 +80,8 @@ function parseExternalFormat(json) {
     // Attach event metadata when present
     if (n.event) {
       baseNode.eventId          = n.event.id          || null
-      baseNode.description      = n.event.description || ''
+      // 将外部事件描述统一映射为文档摘录，供属性面板“文档溯源”使用
+      baseNode.sourceDocExcerpt = n.event.description || ''
       baseNode.errorLevel       = n.event.errorLevel  || ''
       baseNode.priority         = n.event.priority    ?? 0
       baseNode.probability      = n.event.probability ?? null

@@ -16,7 +16,7 @@
  *   - 模型选择器嵌入输入框底部，快捷提问显示于输入框上方
  *   - AI 回复时若面板较小自动动画展开
  */
-import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { Alert, Input, InputNumber, Spin, Tag, Tooltip, Select, Modal, message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -465,7 +465,16 @@ function AgentThinkingInline({
   running,
   onToggleExpand,
 }) {
+  const bodyRef = useRef(null)
   const stepCount = Array.isArray(steps) ? steps.length : 0
+
+  useLayoutEffect(() => {
+    if (!expanded || stepCount === 0) return
+    const el = bodyRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [expanded, steps, stepCount])
+
   if (!stepCount) return null
 
   return (
@@ -484,7 +493,7 @@ function AgentThinkingInline({
         {running && <span className="agent-thinking-live-dot" />}
       </button>
       {expanded && (
-        <div className="agent-thinking-inline-body">
+        <div ref={bodyRef} className="agent-thinking-inline-body">
           {steps.map((step, idx) => {
             const toneMeta = AGENT_THINKING_TONE_META[step.tone] || AGENT_THINKING_TONE_META.info
             const isLast = idx === steps.length - 1
@@ -836,11 +845,17 @@ const AIAssistant = forwardRef(function AIAssistant({ contextType = 'faultTree',
     }
   }, [isOpen, projectId, contextType, effectiveMode, loadConversationList, loadConversationHistory, resetConversationState])
 
-  // ── 自动滚动到底部（加载历史时跳过）────────────────────────
+  // ── 自动滚动到底部（加载历史时跳过；Agent 思考步骤更新时也滚到底，便于看到最新轨迹）──
   useEffect(() => {
-    if (skipScrollRef.current) { skipScrollRef.current = false; return }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
+    if (skipScrollRef.current) {
+      skipScrollRef.current = false
+      return
+    }
+    const id = window.requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(id)
+  }, [messages, loading, thinkingSteps])
 
   // ── 窗口缩放时重新定位 + 约束面板尺寸 ──────────────────────
   useEffect(() => {

@@ -11,6 +11,7 @@ import {
   Modal, Upload, Form, Input, Steps,
   Button, Alert, Progress, Typography, Space, message,
 } from 'antd'
+const { TextArea } = Input
 import {
   InboxOutlined, FileTextOutlined, ThunderboltOutlined,
   CheckCircleOutlined, LoadingOutlined,
@@ -109,8 +110,9 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
       let genResult
       let retryPayload
       if (isFaultTree) {
-        retryPayload = { docIds, topEvent: values.topEvent, type: 'ft' }
-        genResult = await generateFaultTree(docIds, values.topEvent)
+        const userRequirements = values.userRequirements || ''
+        retryPayload = { docIds, topEvent: values.topEvent, userRequirements, type: 'ft' }
+        genResult = await generateFaultTree(docIds, values.topEvent, undefined, userRequirements)
       } else {
         retryPayload = { docIds, type: 'kg' }
         genResult = await generateKnowledgeGraph(docIds)
@@ -178,18 +180,33 @@ export default function DocumentUploadModal({ open, target = 'faultTree', onComp
           </Form.Item>
 
           {isFaultTree && (
-            <Form.Item
-              name="topEvent"
-              label="项目名称"
-              rules={[{ required: true, message: '请输入项目名称' }]}
-            >
-              <Input
-                prefix={<FileTextOutlined className="text-gray-400" />}
-                placeholder="例：锅炉房故障树项目"
-                maxLength={60}
-                showCount
-              />
-            </Form.Item>
+            <>
+              <Form.Item
+                name="topEvent"
+                label="项目名称"
+                rules={[{ required: true, message: '请输入项目名称' }]}
+              >
+                <Input
+                  prefix={<FileTextOutlined className="text-gray-400" />}
+                  placeholder="例：锅炉房故障树项目"
+                  maxLength={60}
+                  showCount
+                />
+              </Form.Item>
+
+              <Form.Item
+                name="userRequirements"
+                label="AI 生成补充说明（可选）"
+                rules={[{ max: 100, message: '最多 100 个字符' }]}
+              >
+                <TextArea
+                  placeholder="例：希望重点分析电气系统和液压系统的失效模式..."
+                  rows={3}
+                  maxLength={100}
+                  showCount
+                />
+              </Form.Item>
+            </>
           )}
 
           <div className="flex justify-end gap-2 mt-2">

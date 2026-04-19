@@ -15,10 +15,11 @@ export default function NewProjectModal({ open, onConfirm, onCancel }) {
   function handleOk() {
     form.validateFields().then(values => {
       onConfirm({
-        name:        values.name,
-        template:    values.template || 'blank',
-        description: values.description || '',
-        tags:        values.tags || [],
+        name:             values.name,
+        template:         values.template || 'blank',
+        description:      values.description || '',
+        tags:             values.tags || [],
+        userRequirements: values.userRequirements || '',
       })
       form.resetFields()
     })
@@ -70,6 +71,19 @@ export default function NewProjectModal({ open, onConfirm, onCancel }) {
             mode="tags"
             placeholder="输入标签后按回车确认，支持多个"
             tokenSeparators={[',']}
+          />
+        </Form.Item>
+
+        <Form.Item
+          name="userRequirements"
+          label="AI 生成补充说明（可选）"
+          rules={[{ max: 100, message: '最多 100 个字符' }]}
+        >
+          <TextArea
+            placeholder="例：希望重点分析电气系统和液压系统的失效模式..."
+            rows={3}
+            maxLength={100}
+            showCount
           />
         </Form.Item>
       </Form>

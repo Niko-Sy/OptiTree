@@ -458,7 +458,7 @@ export default function Dashboard() {
       if (payload.type === 'kg') {
         data = await generateKnowledgeGraph(payload.docIds, project.id)
       } else {
-        data = await generateFaultTree(payload.docIds, payload.topEvent, project.id)
+        data = await generateFaultTree(payload.docIds, payload.topEvent, project.id, payload.userRequirements)
       }
 
       setTaskMetaByProject(prev => ({

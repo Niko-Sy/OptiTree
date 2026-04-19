@@ -72,9 +72,9 @@ function NodePanel() {
       probability: selected.probability ?? null,
       width: selected.width,
       height: selected.height,
-      sourceDocName:    selected.sourceDocName    ?? '',
-      sourceDocPage:    selected.sourceDocPage    ?? null,
-      sourceDocExcerpt: selected.sourceDocExcerpt ?? '',
+      sourceDocName:    selected.documents    ?? '',
+      sourceDocExcerpt: selected.description ?? '',
+      investigateMethod: selected.investigateMethod ?? '',
     })
     else form.resetFields()
   }, [selected, form])
@@ -82,10 +82,10 @@ function NodePanel() {
   if (!selected) return null
 
   function handleOpenSourceDocument() {
+    const values = form.getFieldsValue(['sourceDocName', 'sourceDocExcerpt'])
     openSourceReference({
-      fileName: selected.sourceDocName,
-      page: selected.sourceDocPage,
-      excerpt: selected.sourceDocExcerpt,
+      fileName: values.sourceDocName || selected.sourceDocName,
+      excerpt: values.sourceDocExcerpt || selected.sourceDocExcerpt,
     })
   }
 
@@ -99,8 +99,8 @@ function NodePanel() {
       if (values.height > 0) patch.height = values.height
       if (selected.type !== 'gate') {
         patch.sourceDocName    = values.sourceDocName    || null
-        patch.sourceDocPage    = values.sourceDocPage    || null
         patch.sourceDocExcerpt = values.sourceDocExcerpt || null
+        patch.investigateMethod = values.investigateMethod || null
       }
       updateNode(selected.id, patch)
     })
@@ -248,7 +248,7 @@ function NodePanel() {
           </Form.Item>
         )}
 
-        {selected.type !== 'gate' && (
+        {selected.type == 'basicEvent' && (
           <>
             <Divider style={{ margin: '8px 0' }}>
               <span className="text-xs text-gray-400" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -258,16 +258,33 @@ function NodePanel() {
             <Form.Item name="sourceDocName" label="文档名称">
               <Input placeholder="如：液压维护手册第三版.pdf" maxLength={120} size="small" />
             </Form.Item>
-            <Form.Item name="sourceDocPage" label="参考页码">
-              <InputNumber
-                min={1} max={9999} placeholder="页码"
-                style={{ width: '100%' }} size="small"
-              />
-            </Form.Item>
-            <Form.Item name="sourceDocExcerpt" label="原文摘录">
+            <Form.Item
+              name="sourceDocExcerpt"
+              label={(
+                <span className="flex items-center gap-1">
+                  原文摘录
+                  <Tooltip title="在文档阅读器中打开并搜索当前原文摘录">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<InfoCircleOutlined />}
+                      onClick={(e) => { e.preventDefault(); handleOpenSourceDocument() }}
+                    />
+                  </Tooltip>
+                </span>
+              )}
+            >
               <TextArea
                 rows={3} maxLength={300} 
                 placeholder="相关原文片段..."
+                size="small"
+              />
+            </Form.Item>
+            <Form.Item name="investigateMethod" label="排查方法">
+              <TextArea
+                rows={3}
+                maxLength={300}
+                placeholder="输入该事件的排查方法..."
                 size="small"
               />
             </Form.Item>
@@ -276,6 +293,7 @@ function NodePanel() {
                 打开对应文档
               </Button>
             )}
+            
           </>
         )}
       </Form>

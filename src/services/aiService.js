@@ -51,11 +51,12 @@ function normalizeTaskResponse(data, fallbackProjectId) {
   }
 }
 
-export function generateFaultTree(docIds, topEvent, projectId) {
+export function generateFaultTree(docIds, topEvent, projectId, userRequirements) {
   return post('/api/v1/ai/fault-trees/generate', {
     docIds,
     topEvent,
     ...(projectId ? { projectId } : {}),
+    ...(userRequirements ? { userRequirements } : {}),
   }).then((data) => normalizeTaskResponse(data, projectId))
 }
 
